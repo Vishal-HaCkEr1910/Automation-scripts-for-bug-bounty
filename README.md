@@ -98,15 +98,13 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 
 The fastest and safest way to install everything is using the provided setup.sh.
 
-'''bash
-git clone https://github.com/Vishal-HaCkEr1910/Automation-scripts-for-bug-bounty.git
-=> go inside the folder
-chmod +x setup.sh
-./setup.sh'''
+	git clone https://github.com/Vishal-HaCkEr1910/Automation-scripts-for-bug-bounty.git  # => go inside the folder
+	chmod +x setup.sh
+	./setup.sh
 
 After installation:
 
-source ~/.bashrc
+	source ~/.bashrc
 
 ✔ Installs Go, Node, Python, all recon & analysis tools
 ✔ Updates Nuclei templates
