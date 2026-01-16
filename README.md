@@ -1,116 +1,217 @@
+🔍 JS Recon & Secrets Scanner v2.0
 
-JS Recon & Secrets Scanner v2.0
-JS Recon & Secrets Scanner is an advanced automated framework designed for bug bounty hunters and security researchers. It orchestrates a multi-phase pipeline to discover, download, and analyze JavaScript files across a large number of subdomains to find hidden API endpoints, hardcoded secrets, and vulnerable libraries.
+JS Recon & Secrets Scanner is an advanced automated reconnaissance and JavaScript analysis framework built for bug bounty hunters, red teamers, and security researchers.
 
-🚀 Features
-Multi-Tool Discovery: Aggregates results from 7 different discovery tools (Katana, GAU, Waybackurls, etc.).
+It performs large-scale JavaScript discovery, deep static analysis, source map reconstruction, and secret detection across multiple subdomains using a multi-phase pipeline.
 
-Intelligent Filtering: Automatically skips vendor noise (jQuery, Bootstrap) to focus on custom application logic.
+⸻
 
-Source Map Recovery: Automatically detects .js.map files and attempts to reconstruct the original source tree.
+🚀 Key Features
 
-Deep Structural Analysis: Uses jsluice to parse the Abstract Syntax Tree (AST) of JavaScript for logic-based secret hunting.
+🔎 Multi-Source JavaScript Discovery
 
-Automated Verification: Integrates Nuclei to verify findings against known vulnerability signatures.
+Aggregates JavaScript URLs using 7 powerful recon tools:
+	•	Katana
+	•	GAU (GetAllURLs)
+	•	Waybackurls
+	•	Hakrawler
+	•	Subjs
+	•	Gospider
+	•	getJS
 
-Categorized Reporting: Generates a structured summary of findings grouped by severity (High/Medium/Info).
+⸻
+
+🧠 Intelligent Noise Filtering
+	•	Automatically skips vendor and framework noise
+(jQuery, Bootstrap, React bundles, analytics)
+	•	Focuses only on custom application logic
+
+⸻
+
+🗺️ Source Map Recovery
+	•	Detects .js.map files
+	•	Reconstructs original source code using sourcemapper
+
+⸻
+
+🧬 Deep JavaScript Analysis
+	•	Parses JavaScript AST (Abstract Syntax Tree) using jsluice
+	•	Extracts:
+	•	Hidden API endpoints
+	•	Tokens & secrets
+	•	Auth logic
+	•	Hardcoded credentials
+
+⸻
+
+✅ Automated Vulnerability Verification
+	•	Integrates Nuclei
+	•	Verifies exposed secrets & JS issues using templates
+
+⸻
+
+📊 Structured Reporting
+	•	Findings categorized by severity:
+	•	High
+	•	Medium
+	•	Informational
+	•	Output formats:
+	•	TXT
+	•	JSON
+
+⸻
 
 🛠️ Requirements
-To use the full potential of this script, you must have the following tools installed in your system's $PATH.
 
-1. Discovery Phase Tools
-Katana
+⚠️ All tools must be available in $PATH
 
-GAU (Get All URLs)
+🔹 Discovery Tools
+	•	Katana
+	•	GAU
+	•	Waybackurls
+	•	Hakrawler
+	•	Subjs
+	•	Gospider
+	•	getJS
 
-Waybackurls
+🔹 Analysis Tools
+	•	Nuclei
+	•	Jsluice
+	•	TruffleHog
+	•	Retire.js
+	•	LinkFinder
+📍 /opt/LinkFinder/linkfinder.py
+	•	SecretFinder
+📍 /opt/SecretFinder/SecretFinder.py
 
-Hakrawler
+🔹 Utility Tools
+	•	Go
+	•	Python 3
+	•	Node.js & NPM
+	•	Curl
 
-Subjs
+⸻
 
-Gospider
+⚡ Installation (Recommended)
 
-getJS
+✅ Auto Install (Fresh VPS / Kali / Ubuntu)
 
-2. Analysis Phase Tools
-Nuclei
+The fastest and safest way to install everything is using the provided setup.sh.
 
-Jsluice
+git clone https://github.com/yourusername/js-recon-secrets-scanner.git
+cd js-recon-secrets-scanner
+chmod +x setup.sh
+./setup.sh
 
-Trufflehog
+After installation:
 
-Retire.js
+source ~/.bashrc
 
-LinkFinder (Expected at /opt/LinkFinder/linkfinder.py)
+✔ Installs Go, Node, Python, all recon & analysis tools
+✔ Updates Nuclei templates
+✔ Sets correct paths automatically
 
-SecretFinder (Expected at /opt/SecretFinder/SecretFinder.py)
+⸻
 
-3. Utility Tools
-Node.js & NPM: Required for js-beautify.
-
-npm install -g js-beautify
-
-Go: Required for installing many of the discovery tools and sourcemapper.
-
-Curl: For file downloading.
-
-📥 Installation
-**Clone the Scanner**
-  
-Install Python Dependencies:
-
-Bash
-
- ** pip3 install requests argparse**
-  Ensure Nuclei Templates are up to date:
-
-Bash
-
-  **nuclei -update-templates**
-  
 📖 Usage
-Basic Scan
-Provide a list of subdomains in a .txt file:
 
-Bash
+🔹 Basic Scan
 
-  **python3 scanner.py -i subdomains.txt**
-Advanced Options
-Increase Threads: Use more threads for faster downloading (default is based on CPU count).
+Provide a list of subdomains:
 
-Bash
+python3 scanner.py -i subdomains.txt
 
-  **python3 scanner.py -i subdomains.txt -t 50**
-Analyze Existing Files: If you have already downloaded JS files and just want to re-run the analysis:
 
-Bash
+⸻
 
-  **python3 scanner.py -i subdomains.txt --skip-discovery --skip-download**
-Custom Nuclei Templates: Specify a custom path for your exposure templates:
+🔹 Increase Download Threads
 
-Bash
+(Default: CPU cores)
 
-  **python3 scanner.py -i subdomains.txt --templates /home/user/my-custom-templates/**
-  
+python3 scanner.py -i subdomains.txt -t 50
+
+
+⸻
+
+🔹 Analyze Existing JS Files Only
+
+Skip discovery & downloading:
+
+python3 scanner.py -i subdomains.txt --skip-discovery --skip-download
+
+
+⸻
+
+🔹 Use Custom Nuclei Templates
+
+python3 scanner.py -i subdomains.txt --templates /home/user/custom-templates/
+
+
+⸻
+
 📂 Output Structure
-The script organizes its output into several directories:
 
-**recon_output/: Raw output from discovery tools (Katana, GAU, etc.).
+recon_output/
+ ├── katana.txt
+ ├── gau.txt
+ ├── wayback.txt
 
-js_storage/: Downloaded and beautified .js files (hashed filenames).
+js_storage/
+ └── beautified JS files (hashed)
 
-js_maps/: Found JavaScript Source Maps.
+js_maps/
+ └── discovered .js.map files
 
-source_code/: Reconstructed source code from maps using sourcemapper.
+source_code/
+ └── reconstructed source from maps
 
-final_results/: Final text/JSON reports from scanners (Endpoints, Secrets, Nuclei).
+final_results/
+ ├── endpoints.txt
+ ├── secrets.json
+ ├── nuclei_findings.txt
 
-metadata/: JSON files mapping hashed filenames back to their original source URLs.
-**
-⚠️ Disclaimer
-This tool is for educational purposes and authorized security testing only. Performing reconnaissance or scanning against targets without explicit permission is illegal and unethical. The developer assumes no liability for misuse or damage caused by this program.
+metadata/
+ └── hash → original URL mappings
 
-Happy Hunting! 🎯
 
-Would you like me to help you create a setup script (a .sh file) that automatically installs all these Go and Python dependencies for you on a fresh Linux VPS?
+⸻
+
+⚠️ Legal Disclaimer
+
+This tool is strictly for educational purposes and authorized security testing.
+
+	•	❌ Do NOT scan targets without permission
+	•	❌ Unauthorized reconnaissance is illegal
+	•	✅ Use only on assets you own or are authorized to test
+
+The developer assumes no liability for misuse.
+
+⸻
+
+🎯 Roadmap (Planned)
+	•	HTML report dashboard
+	•	Docker support
+	•	Headless browser JS execution
+	•	Live secret validation
+	•	CI/CD recon mode
+
+⸻
+
+⭐ Support
+
+If this tool helps you:
+	•	Star the repo ⭐
+	•	Share feedback
+	•	Submit PRs
+
+⸻
+
+Happy Hunting & Happy Hacking 👾
+
+If you want next:
+	•	🐳 Dockerfile
+	•	📊 HTML reporting
+	•	🧠 AI-based JS secret classification
+	•	🧪 Bug-bounty optimized presets
+
+Just say the word 👊
