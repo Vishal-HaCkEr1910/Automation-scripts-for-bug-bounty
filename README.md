@@ -1,4 +1,4 @@
-🔍 JS Recon & Secrets Scanner v2.0
+# **🔍 JS Recon & Secrets Scanner v2.0**
 
 JS Recon & Secrets Scanner is an advanced automated reconnaissance and JavaScript analysis framework built for bug bounty hunters, red teamers, and security researchers.
 
@@ -6,9 +6,9 @@ It performs large-scale JavaScript discovery, deep static analysis, source map r
 
 ⸻
 
-🚀 Key Features
+## **🚀 Key Features**
 
-🔎 Multi-Source JavaScript Discovery
+**🔎 Multi-Source JavaScript Discovery**
 
 Aggregates JavaScript URLs using 7 powerful recon tools:
 	•	Katana
@@ -21,20 +21,20 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 
 ⸻
 
-🧠 Intelligent Noise Filtering
+**🧠 Intelligent Noise Filtering**
 	•	Automatically skips vendor and framework noise
 (jQuery, Bootstrap, React bundles, analytics)
 	•	Focuses only on custom application logic
 
 ⸻
 
-🗺️ Source Map Recovery
+**🗺️ Source Map Recovery**
 	•	Detects .js.map files
 	•	Reconstructs original source code using sourcemapper
 
 ⸻
 
-🧬 Deep JavaScript Analysis
+**🧬 Deep JavaScript Analysis**
 	•	Parses JavaScript AST (Abstract Syntax Tree) using jsluice
 	•	Extracts:
 	•	Hidden API endpoints
@@ -44,13 +44,13 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 
 ⸻
 
-✅ Automated Vulnerability Verification
+**✅ Automated Vulnerability Verification**
 	•	Integrates Nuclei
 	•	Verifies exposed secrets & JS issues using templates
 
 ⸻
 
-📊 Structured Reporting
+**📊 Structured Reporting**
 	•	Findings categorized by severity:
 	•	High
 	•	Medium
@@ -61,11 +61,11 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 
 ⸻
 
-🛠️ Requirements
+## **🛠️ Requirements**
 
 ⚠️ All tools must be available in $PATH
 
-🔹 Discovery Tools
+**🔹 Discovery Tools**
 	•	Katana
 	•	GAU
 	•	Waybackurls
@@ -74,7 +74,7 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 	•	Gospider
 	•	getJS
 
-🔹 Analysis Tools
+**🔹 Analysis Tools**
 	•	Nuclei
 	•	Jsluice
 	•	TruffleHog
@@ -84,7 +84,7 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 	•	SecretFinder
 📍 /opt/SecretFinder/SecretFinder.py
 
-🔹 Utility Tools
+**🔹 Utility Tools**
 	•	Go
 	•	Python 3
 	•	Node.js & NPM
@@ -92,16 +92,17 @@ Aggregates JavaScript URLs using 7 powerful recon tools:
 
 ⸻
 
-⚡ Installation (Recommended)
+## **⚡ Installation (Recommended)**
 
 ✅ Auto Install (Fresh VPS / Kali / Ubuntu)
 
 The fastest and safest way to install everything is using the provided setup.sh.
 
-git clone https://github.com/yourusername/js-recon-secrets-scanner.git
-cd js-recon-secrets-scanner
+'''bash
+git clone https://github.com/Vishal-HaCkEr1910/Automation-scripts-for-bug-bounty.git
+=> go inside the folder
 chmod +x setup.sh
-./setup.sh
+./setup.sh'''
 
 After installation:
 
@@ -119,7 +120,9 @@ source ~/.bashrc
 
 Provide a list of subdomains:
 
-python3 scanner.py -i subdomains.txt
+=>RENAME Python file as "scanner.py"
+
+	python3 scanner.py -i subdomains.txt
 
 
 ⸻
@@ -128,8 +131,7 @@ python3 scanner.py -i subdomains.txt
 
 (Default: CPU cores)
 
-python3 scanner.py -i subdomains.txt -t 50
-
+	python3 scanner.py -i subdomains.txt -t 50
 
 ⸻
 
@@ -137,14 +139,14 @@ python3 scanner.py -i subdomains.txt -t 50
 
 Skip discovery & downloading:
 
-python3 scanner.py -i subdomains.txt --skip-discovery --skip-download
+	python3 scanner.py -i subdomains.txt --skip-discovery --skip-download
 
 
 ⸻
 
 🔹 Use Custom Nuclei Templates
 
-python3 scanner.py -i subdomains.txt --templates /home/user/custom-templates/
+	python3 scanner.py -i subdomains.txt --templates /home/user/custom-templates/
 
 
 ⸻
@@ -188,15 +190,6 @@ The developer assumes no liability for misuse.
 
 ⸻
 
-🎯 Roadmap (Planned)
-	•	HTML report dashboard
-	•	Docker support
-	•	Headless browser JS execution
-	•	Live secret validation
-	•	CI/CD recon mode
-
-⸻
-
 ⭐ Support
 
 If this tool helps you:
@@ -207,11 +200,3 @@ If this tool helps you:
 ⸻
 
 Happy Hunting & Happy Hacking 👾
-
-If you want next:
-	•	🐳 Dockerfile
-	•	📊 HTML reporting
-	•	🧠 AI-based JS secret classification
-	•	🧪 Bug-bounty optimized presets
-
-Just say the word 👊
