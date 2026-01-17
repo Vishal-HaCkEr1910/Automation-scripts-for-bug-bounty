@@ -3,7 +3,6 @@
 > **Professional-grade GitHub reconnaissance for bug bounty hunters and security researchers**
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/Security-Research-red.svg)]()
 
 A comprehensive, modular Python tool designed for ethical security research and bug bounty reconnaissance. This tool performs **passive GitHub reconnaissance**, aggregates findings intelligently, and implements a human-in-the-loop validation workflow to minimize false positives.
@@ -584,7 +583,7 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ## 📞 Support
 
-- 📧 **Email:** vishalrao191004@gmail.co,24427@iiitu.ac.in
+- 📧 **Email:** vishalrao191004@gmail.com,24427@iiitu.ac.in
 
 ---
 
