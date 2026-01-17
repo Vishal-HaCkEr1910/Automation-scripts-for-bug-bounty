@@ -156,13 +156,547 @@ github_recon_results/
 
 ---
 
-## 📖 Usage Examples
+# 🛠️ Usage Guide
 
-### **Basic Scan**
+This guide covers all usage modes, command-line arguments, and performance configurations for the GitHub Advanced Reconnaissance Tool.
+
+---
+
+## 📋 Table of Contents
+
+- [Interactive Mode](#1-interactive-mode)
+- [CLI Automation Mode](#2-cli-automation-mode)
+- [Performance Modes](#3-performance-modes)
+- [Command Line Arguments](#️-command-line-arguments)
+- [Output Structure](#-output-structure)
+- [Recommended Settings](#-recommended-settings-by-scenario)
+- [Advanced Examples](#-advanced-usage-examples)
+
+---
+
+## 1. Interactive Mode
+
+Simply run the script, and it will prompt you for the Token and Organization.
+
 ```bash
-python github_recon.py
-# Follow interactive prompts
+python3 github_recon.py
 ```
+
+**Interactive Prompts:**
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║                                                              ║
+║   GitHub Advanced Reconnaissance Tool                        ║
+║   Professional Bug Bounty & Security Research                ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+[14:30:22] [HEADER] Configuration Setup
+Enter GitHub Personal Access Token: ghp_xxxxxxxxxxxxxxxxxxxx
+Enter target organization name: tesla
+Enable validation mode? (y/n): y
+
+[14:30:25] [SUCCESS] Authenticated as: researcher_username
+[14:30:26] [INFO] Starting comprehensive GitHub reconnaissance...
+```
+
+**When to Use:**
+- ✅ First-time users
+- ✅ One-off manual scans
+- ✅ Learning and testing
+- ✅ When you need validation workflow
+
+---
+
+## 2. CLI Automation Mode
+
+Pass arguments directly to bypass prompts. Perfect for **cron jobs** or **automation scripts**.
+
+```bash
+python3 github_recon.py --token "ghp_YOURTOKEN" --org "tesla" --no-validation
+```
+
+### **Examples:**
+
+#### Basic Automated Scan
+```bash
+python3 github_recon.py \
+  --token "ghp_1234567890abcdef" \
+  --org "microsoft"
+```
+
+#### Silent Background Scan
+```bash
+python3 github_recon.py \
+  --token "ghp_1234567890abcdef" \
+  --org "google" \
+  --no-validation \
+  > scan.log 2>&1 &
+```
+
+#### Scheduled Cron Job
+```bash
+# Add to crontab: Daily scan at 2 AM
+0 2 * * * /usr/bin/python3 /path/to/github_recon.py --token "$GITHUB_TOKEN" --org "target-org" --no-validation
+```
+
+**When to Use:**
+- ✅ Automated scanning pipelines
+- ✅ Scheduled reconnaissance
+- ✅ CI/CD integration
+- ✅ Batch processing multiple organizations
+
+---
+
+## 3. Performance Modes
+
+### 🏎️ **Aggressive Mode (Fast & Noisy)**
+
+Uses **10 workers** and **minimal delay (0.5s)**. Use this if you don't care about rate limits or noise.
+
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "target" \
+  --aggressive
+```
+
+**Configuration:**
+- **Workers:** 10 parallel threads
+- **Delay:** 0.5 seconds between requests
+- **Max Results:** 100 per query
+- **Speed:** ⚡⚡⚡ Fast
+- **Stealth:** 🔊 Noisy
+
+**Best For:**
+- Small organizations (<10 repos)
+- Time-critical scans
+- When you have high rate limits
+- Testing environments
+
+**⚠️ Warning:** May exhaust rate limits quickly on large organizations!
+
+---
+
+### 🥷 **Conservative Mode (Stealthy)**
+
+Uses **2 workers** and **long delays (3s)**. Use this to avoid hitting API rate limits during large scans.
+
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "target" \
+  --conservative
+```
+
+**Configuration:**
+- **Workers:** 2 parallel threads
+- **Delay:** 3 seconds between requests
+- **Max Results:** 50 per query
+- **Speed:** 🐢 Slow
+- **Stealth:** 🤫 Quiet
+
+**Best For:**
+- Large organizations (200+ repos)
+- Rate-limited tokens
+- Long-running scans
+- Production environments
+- Avoiding detection
+
+---
+
+### ⚖️ **Balanced Mode (Default)**
+
+Optimal balance between speed and safety.
+
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "target"
+```
+
+**Configuration:**
+- **Workers:** 5 parallel threads
+- **Delay:** 2 seconds between requests
+- **Max Results:** 100 per query
+- **Speed:** ⚡⚡ Medium
+- **Stealth:** 🔇 Moderate
+
+**Best For:**
+- Most use cases
+- Medium organizations (10-50 repos)
+- First-time scans
+
+---
+
+## ⚙️ Command Line Arguments
+
+### **Full Argument Reference**
+
+| Argument | Short | Type | Description | Default |
+|----------|-------|------|-------------|---------|
+| `--token` | `-t` | `string` | Your GitHub Personal Access Token | Interactive |
+| `--org` | `-o` | `string` | The Target Organization Name | Interactive |
+| `--aggressive` | | `flag` | Sets delay to 0.5s, Workers to 10 | `False` |
+| `--conservative` | | `flag` | Sets delay to 3.0s, Workers to 2 | `False` |
+| `--delay` | `-d` | `float` | Custom delay between requests (seconds) | `2.0` |
+| `--workers` | `-w` | `int` | Number of parallel threads | `5` |
+| `--max-results` | `-m` | `int` | Maximum results per query | `100` |
+| `--no-validation` | | `flag` | Skip the manual "Yes/No" validation step | `False` |
+| `--output` | | `string` | Custom output directory path | `github_recon_results` |
+| `--verbose` | `-v` | `flag` | Enable verbose logging | `False` |
+| `--quiet` | `-q` | `flag` | Minimal output (errors only) | `False` |
+
+### **Usage Examples:**
+
+#### Custom Delay
+```bash
+python3 github_recon.py --token "ghp_..." --org "target" --delay 5.0
+```
+
+#### Custom Workers
+```bash
+python3 github_recon.py --token "ghp_..." --org "target" --workers 8
+```
+
+#### Combined Custom Settings
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "target" \
+  --delay 1.5 \
+  --workers 7 \
+  --max-results 75
+```
+
+#### Verbose Mode
+```bash
+python3 github_recon.py --token "ghp_..." --org "target" --verbose
+```
+
+#### Quiet Mode (Logging Only)
+```bash
+python3 github_recon.py --token "ghp_..." --org "target" --quiet > scan.log
+```
+
+#### Custom Output Directory
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "target" \
+  --output "/path/to/custom/results"
+```
+
+---
+
+## 📂 Output Structure
+
+All results are saved in the `github_recon_results/` directory, organized by target and timestamp.
+
+```
+github_recon_results/
+└── tesla_20250117_143022/
+    ├── report.html                  # 📊 Summary dashboard (Open in browser)
+    ├── raw_findings.json            # 📄 All raw data for parsing
+    ├── confirmed_findings.json      # ✅ Manually verified results
+    ├── false_positives.json         # ❌ Marked as false positives
+    ├── summary.json                 # 📈 Statistical summary
+    ├── gitleaks_repo1.json          # 🔍 Gitleaks deep scan results
+    └── trufflehog_repo2.json        # 🔍 TruffleHog deep scan results
+```
+
+### **File Descriptions:**
+
+| File | Description | When to Use |
+|------|-------------|-------------|
+| **report.html** | Visual HTML dashboard with charts and summaries | Quick overview, presentations |
+| **raw_findings.json** | All findings before validation | Automated processing, scripts |
+| **confirmed_findings.json** | User-validated true positives | Final reporting, bug bounty submissions |
+| **false_positives.json** | Findings marked as FP during validation | Pattern refinement, ML training |
+| **summary.json** | Aggregate statistics and counts | Quick stats, dashboards |
+| **gitleaks_*.json** | External tool results (if installed) | Deep analysis, cross-validation |
+| **trufflehog_*.json** | External tool results (if installed) | Deep analysis, cross-validation |
+
+### **Opening Reports:**
+
+```bash
+# Open HTML report in browser
+open github_recon_results/tesla_20250117_143022/report.html
+
+# Or on Linux
+xdg-open github_recon_results/tesla_20250117_143022/report.html
+
+# Or on Windows
+start github_recon_results/tesla_20250117_143022/report.html
+```
+
+### **Processing JSON Results:**
+
+```bash
+# Pretty print findings
+cat github_recon_results/tesla_*/raw_findings.json | jq .
+
+# Count findings by severity
+cat github_recon_results/tesla_*/summary.json | jq '.by_severity'
+
+# Extract all URLs
+cat github_recon_results/tesla_*/confirmed_findings.json | jq -r '.[].url'
+
+# Filter HIGH severity findings
+cat github_recon_results/tesla_*/raw_findings.json | jq '[.[] | select(.severity == "HIGH")]'
+```
+
+---
+
+## 🎯 Recommended Settings by Scenario
+
+### **Small Organization (<10 repos)**
+
+**Settings:**
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "small-startup" \
+  --delay 1 \
+  --workers 5
+```
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `delay` | 1s | Fast scanning, low API usage |
+| `workers` | 5 | Parallel processing without overwhelming |
+| `max-results` | 100 | Complete coverage |
+
+**Estimated Time:** 5-10 minutes  
+**Estimated API Calls:** 500-1,000
+
+---
+
+### **Medium Organization (10-50 repos)**
+
+**Settings:**
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "medium-company" \
+  --delay 2 \
+  --workers 5
+```
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `delay` | 2s | Balanced speed and safety |
+| `workers` | 5 | Optimal parallelism |
+| `max-results` | 100 | Comprehensive results |
+
+**Estimated Time:** 15-30 minutes  
+**Estimated API Calls:** 1,000-2,500
+
+---
+
+### **Large Organization (50-200 repos)**
+
+**Settings:**
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "large-corp" \
+  --delay 3 \
+  --workers 3
+```
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `delay` | 3s | Conservative to avoid rate limits |
+| `workers` | 3 | Reduced parallelism |
+| `max-results` | 50 | Focused results |
+
+**Estimated Time:** 45-90 minutes  
+**Estimated API Calls:** 2,500-4,000
+
+---
+
+### **Enterprise Organization (200+ repos)**
+
+**Settings:**
+```bash
+python3 github_recon.py \
+  --token "ghp_..." \
+  --org "enterprise-giant" \
+  --conservative
+```
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `delay` | 5s | Maximum rate limit protection |
+| `workers` | 2 | Minimal parallelism |
+| `max-results` | 50 | Selective targeting |
+
+**Estimated Time:** 2-4 hours  
+**Estimated API Calls:** 4,000-5,000
+
+**💡 Pro Tip:** For enterprise scans, consider splitting into multiple sessions or using GitHub App tokens (15,000 requests/hour).
+
+---
+
+## 🚀 Advanced Usage Examples
+
+### **1. Multi-Organization Batch Scan**
+
+Create a bash script for multiple targets:
+
+```bash
+#!/bin/bash
+# batch_scan.sh
+
+TARGETS=("org1" "org2" "org3" "org4")
+TOKEN="ghp_your_token_here"
+
+for org in "${TARGETS[@]}"; do
+    echo "Scanning: $org"
+    python3 github_recon.py \
+        --token "$TOKEN" \
+        --org "$org" \
+        --conservative \
+        --no-validation
+    
+    # Wait 1 hour between organizations
+    sleep 3600
+done
+```
+
+Run:
+```bash
+chmod +x batch_scan.sh
+./batch_scan.sh
+```
+
+---
+
+### **2. Scheduled Daily Reconnaissance**
+
+Add to crontab (`crontab -e`):
+
+```bash
+# Daily scan at 2 AM
+0 2 * * * cd /path/to/tool && /usr/bin/python3 github_recon.py --token "$GITHUB_TOKEN" --org "target" --no-validation >> /var/log/github_recon.log 2>&1
+
+# Weekly deep scan on Sundays at 3 AM
+0 3 * * 0 cd /path/to/tool && /usr/bin/python3 github_recon.py --token "$GITHUB_TOKEN" --org "target" --conservative --no-validation
+```
+
+---
+
+### **3. Continuous Monitoring with Alerting**
+
+```bash
+#!/bin/bash
+# monitor.sh - Run every 6 hours and alert on new findings
+
+python3 github_recon.py \
+    --token "$GITHUB_TOKEN" \
+    --org "target" \
+    --no-validation
+
+# Count findings
+FINDINGS=$(cat github_recon_results/*/summary.json | jq '.total_findings')
+
+# Alert if > 10 findings
+if [ "$FINDINGS" -gt 10 ]; then
+    echo "⚠️ Found $FINDINGS issues!" | mail -s "GitHub Recon Alert" you@example.com
+fi
+```
+
+---
+
+### **4. Integration with CI/CD**
+
+**GitHub Actions Example:**
+
+```yaml
+name: GitHub Recon Scan
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Run GitHub Recon
+        env:
+          GITHUB_TOKEN: ${{ secrets.RECON_TOKEN }}
+        run: |
+          python3 github_recon.py \
+            --token "$GITHUB_TOKEN" \
+            --org "target-org" \
+            --no-validation
+      
+      - name: Upload Results
+        uses: actions/upload-artifact@v2
+        with:
+          name: recon-results
+          path: github_recon_results/
+```
+
+---
+
+### **5. Docker Container Deployment**
+
+```bash
+# Build container
+docker build -t github-recon .
+
+# Run scan
+docker run --rm \
+  -e GITHUB_TOKEN="ghp_..." \
+  -v $(pwd)/results:/app/github_recon_results \
+  github-recon \
+  --org "target" \
+  --conservative \
+  --no-validation
+```
+
+---
+
+## 💡 Tips & Best Practices
+
+### **Performance Optimization**
+
+1. **Use `--no-validation` for automation** - Skip interactive prompts
+2. **Adjust workers based on network** - More workers ≠ faster on slow connections
+3. **Monitor rate limits** - Check GitHub API quota before large scans
+4. **Use conservative mode** - For organizations with 100+ repos
+
+### **Accuracy Improvement**
+
+1. **Enable validation mode** - Review findings manually for first scan
+2. **Customize patterns** - Add company-specific secret patterns
+3. **Cross-reference with external tools** - Gitleaks/TruffleHog for verification
+4. **Review false positives** - Refine patterns based on FP data
+
+### **Security & Stealth**
+
+1. **Use environment variables** - Never hardcode tokens
+2. **Rotate tokens regularly** - Change every 30-90 days
+3. **Use dedicated tokens** - Separate tokens for different scopes
+4. **Conservative mode for production** - Avoid detection
+
+---
+
 
 ### **Scan Specific Organization**
 ```python
