@@ -3,7 +3,7 @@
 Advanced GitHub Reconnaissance Tool
 Professional-grade recon for bug bounty hunters and security researchers
 """
-
+import argparse
 import requests
 import re
 import json
@@ -674,38 +674,99 @@ class GitHubRecon:
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN EXECUTION
 # ═══════════════════════════════════════════════════════════════════════════
-
 def main():
-    """Main entry point"""
+    """Main entry point with CLI arguments"""
     print_banner()
+
+    # 1. Setup Argument Parser
+    parser = argparse.ArgumentParser(description='GitHub Advanced Reconnaissance Tool')
     
-    # Get user inputs
-    log("Configuration Setup", "HEADER")
+    # Target Arguments (Optional - if not provided, script asks interactively)
+    parser.add_argument('-t', '--token', help='GitHub Personal Access Token')
+    parser.add_argument('-o', '--org', help='Target Organization')
     
-    # GitHub token
-    token = input(f"{Colors.CYAN}Enter GitHub Personal Access Token: {Colors.END}").strip()
+    # Rate Limiting & Performance Options
+    parser.add_argument('--delay', type=float, default=2.0, 
+                       help='Delay between requests in seconds (default: 2.0)')
+    parser.add_argument('--max-results', type=int, default=100, 
+                       help='Max results per query (default: 100)')
+    parser.add_argument('--workers', type=int, default=5, 
+                       help='Number of parallel workers (default: 5)')
+    
+    # Presets
+    parser.add_argument('--conservative', action='store_true', 
+                       help='Slow mode to avoid detection (3s delay, fewer workers)')
+    parser.add_argument('--aggressive', action='store_true', 
+                       help='Fast mode (0.5s delay, more workers - Risky)')
+    
+    # Validation Toggle
+    parser.add_argument('--no-validation', action='store_true',
+                       help='Skip the interactive validation phase')
+
+    args = parser.parse_args()
+
+    # 2. Apply Configuration Logic
+    if args.conservative:
+        log("Mode: Conservative (Slow & Stealthy)", "INFO")
+        Config.RATE_LIMIT_DELAY = 3.0
+        Config.MAX_WORKERS = 2
+        Config.MAX_RESULTS = 50
+    elif args.aggressive:
+        log("Mode: Aggressive (Fast & Noisy)", "WARNING")
+        Config.RATE_LIMIT_DELAY = 0.5
+        Config.MAX_WORKERS = 10
+        Config.MAX_RESULTS = 200
+    else:
+        # Custom or Default
+        Config.RATE_LIMIT_DELAY = args.delay
+        Config.MAX_WORKERS = args.workers
+        Config.MAX_RESULTS = args.max_results
+
+    log(f"Configuration: Delay={Config.RATE_LIMIT_DELAY}s, Workers={Config.MAX_WORKERS}", "INFO")
+
+    # 3. Handle Token (CLI arg or Interactive)
+    if args.token:
+        token = args.token
+    else:
+        log("Configuration Setup", "HEADER")
+        token = input(f"{Colors.CYAN}Enter GitHub Personal Access Token: {Colors.END}").strip()
+    
     if not token:
         log("Token is required. Exiting.", "ERROR")
         sys.exit(1)
-    
-        # Target organization
+
+    # 4. Handle Target Org (CLI arg or Interactive)
+    if args.org:
+        target_org = args.org
+    else:
+        if not args.token: # Only print header if we haven't already
+            log("Target Setup", "HEADER") 
         target_org = input(f"{Colors.CYAN}Enter target organization: {Colors.END}").strip()
-        if not target_org:
-            log("Organization is required. Exiting.", "ERROR")
-            sys.exit(1)
-        
-        # Initialize and run reconnaissance
-        recon = GitHubRecon(token, target_org)
-        
-        # Ask user if they want validation phase
-        validate = input(f"{Colors.CYAN}Run interactive validation? (y/n): {Colors.END}").lower() == 'y'
-        
-        if recon.run_full_scan():
-            if validate:
-                recon.validate_findings()
-            log("Reconnaissance complete!", "SUCCESS")
-        else:
-            log("Reconnaissance failed.", "ERROR")
+
+    if not target_org:
+        log("Organization is required. Exiting.", "ERROR")
+        sys.exit(1)
+
+    # 5. Run Reconnaissance
+    recon = GitHubRecon(token, target_org)
     
+    # Determine validation preference
+    if args.no_validation:
+        validate = False
+    else:
+        # If running purely from CLI args, default to validation=False unless interactive
+        if args.token and args.org: 
+             validate = False # Assume automated run if args provided
+        else:
+             validate_input = input(f"{Colors.CYAN}Run interactive validation? (y/n): {Colors.END}").lower()
+             validate = validate_input == 'y'
+
+    if recon.run_full_scan():
+        if validate:
+            recon.validate_findings()
+        log("Reconnaissance complete!", "SUCCESS")
+    else:
+        log("Reconnaissance failed.", "ERROR")
+
 if __name__ == "__main__":
-        main()
+    main()
