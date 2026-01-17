@@ -584,10 +584,7 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 ## 📞 Support
 
-- 🐛 **Issues:** [GitHub Issues](https://github.com/yourusername/github-recon-tool/issues)
-- 💬 **Discussions:** [GitHub Discussions](https://github.com/yourusername/github-recon-tool/discussions)
-- 📧 **Email:** security@yourproject.com
-- 🐦 **Twitter:** [@YourHandle](https://twitter.com/yourhandle)
+- 📧 **Email:** vishalrao191004@gmail.co,24427@iiitu.ac.in
 
 ---
 
@@ -608,6 +605,6 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 Made with ❤️ by security researchers, for security researchers
 
-[Report Bug](https://github.com/yourusername/github-recon-tool/issues) · [Request Feature](https://github.com/yourusername/github-recon-tool/issues) · [Documentation](https://github.com/yourusername/github-recon-tool/wiki)
+[Report Bug](https://github.com/Vishal-HaCkEr1910/github-recon-tool/issues) · [Request Feature](https://github.com/Vishal-HaCkEr1910/github-recon-tool/issues) · [Documentation](https://github.com/Vishal-HaCkEr1910/github-recon-tool/wiki)
 
 </div>
