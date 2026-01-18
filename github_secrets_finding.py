@@ -277,10 +277,24 @@ class GitHubRecon:
                     time.sleep(Config.RATE_LIMIT_DELAY)
                     
                 elif r.status_code == 403:
-                    log("Rate limit exceeded. Waiting...", "WARNING")
-                    time.sleep(60)
+                    # Rate limit hit - show clear message
+                    reset_time = int(r.headers.get('X-RateLimit-Reset', 0))
+                    if reset_time:
+                        reset_dt = datetime.fromtimestamp(reset_time)
+                        wait_seconds = (reset_dt - datetime.now()).total_seconds()
+                        
+                        if wait_seconds > 0:
+                            print(f"\n{Colors.YELLOW}⏸  Rate limit reached. Resuming at {reset_dt.strftime('%H:%M:%S')} ({int(wait_seconds)}s wait){Colors.END}")
+                            time.sleep(wait_seconds + 2)
+                            print(f"{Colors.GREEN}▶  Resuming scan...{Colors.END}\n")
+                        else:
+                            time.sleep(60)
+                    else:
+                        time.sleep(60)
+                elif r.status_code == 422:
+                    # Validation failed - query too complex
+                    break
                 else:
-                    log(f"Search failed: {r.status_code}", "ERROR")
                     break
                     
             except Exception as e:
@@ -327,9 +341,10 @@ class GitHubRecon:
     
     def enumerate_repos(self) -> List[Dict]:
         """Enumerate organization repositories"""
-        log(f"Enumerating repositories for {self.target_org}...", "HEADER")
         repos = []
         page = 1
+        
+        print(f"{Colors.YELLOW}Discovering repositories...{Colors.END}", end='', flush=True)
         
         while True:
             try:
@@ -343,6 +358,10 @@ class GitHubRecon:
                     if not data:
                         break
                     repos.extend(data)
+                    
+                    # Update progress
+                    print(f"\r{Colors.YELLOW}Discovering repositories... {len(repos)} found{Colors.END}", end='', flush=True)
+                    
                     page += 1
                     time.sleep(Config.RATE_LIMIT_DELAY)
                 else:
@@ -352,17 +371,43 @@ class GitHubRecon:
                 log(f"Repo enumeration error: {e}", "ERROR")
                 break
         
-        log(f"Found {len(repos)} repositories", "SUCCESS")
+        print(f"\r{Colors.GREEN}✓ Repository Discovery Complete: {len(repos)} repositories found{Colors.END}\n")
+        
+        # Show repository list
+        if repos:
+            print(f"\n{Colors.CYAN}Repositories to be scanned:{Colors.END}")
+            for idx, repo in enumerate(repos[:10], 1):  # Show first 10
+                print(f"  {idx}. {repo.get('name')} ({repo.get('stargazers_count', 0)} ⭐)")
+            if len(repos) > 10:
+                print(f"  ... and {len(repos) - 10} more")
+        
         return repos
     
     def search_sensitive_files(self):
         """Search for sensitive filenames"""
-        log("Searching for sensitive files...", "HEADER")
+        total_files = len(Patterns.SENSITIVE_FILENAMES)
         
-        for filename in Patterns.SENSITIVE_FILENAMES:
+        print(f"\n{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.BOLD}📁 Scanning {total_files} Sensitive Filenames{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}\n")
+        
+        for idx, filename in enumerate(Patterns.SENSITIVE_FILENAMES, 1):
+            # Progress indicator
+            progress_percent = (idx / total_files) * 100
+            progress_bar = "█" * int(progress_percent / 5) + "░" * (20 - int(progress_percent / 5))
+            
+            # Show what we're about to scan
+            print(f"[{progress_bar}] {progress_percent:.1f}% | {Colors.YELLOW}Scanning: {filename:30s}{Colors.END}", end='', flush=True)
+            
             query = f'org:{self.target_org} filename:{filename}'
             results = self.search_code(query)
             
+            # Clear the line and show result
+            if results:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.GREEN}✓ {filename:30s} - Found {len(results):2d} files{Colors.END}")
+            else:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.BLUE}○ {filename:30s} - No results{Colors.END}")
+                
             for item in results:
                 self.findings.append({
                     "type": "Sensitive File",
@@ -373,16 +418,35 @@ class GitHubRecon:
                     "severity": "MEDIUM",
                     "timestamp": datetime.now().isoformat()
                 })
-            
-            log(f"  {filename}: {len(results)} results", "INFO")
+        
+        total_found = len([f for f in self.findings if f['type'] == 'Sensitive File'])
+        print(f"\n{Colors.GREEN}{'─'*70}{Colors.END}")
+        print(f"{Colors.GREEN}✓ Sensitive file scan complete: {total_found} findings{Colors.END}")
+        print(f"{Colors.GREEN}{'─'*70}{Colors.END}\n")
     
     def search_sensitive_extensions(self):
         """Search for files with sensitive extensions"""
-        log("Searching for sensitive extensions...", "HEADER")
+        total_exts = len(Patterns.SENSITIVE_EXTENSIONS)
         
-        for ext in Patterns.SENSITIVE_EXTENSIONS:
+        print(f"\n{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.BOLD}🔐 Scanning {total_exts} Sensitive File Extensions{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}\n")
+        
+        for idx, ext in enumerate(Patterns.SENSITIVE_EXTENSIONS, 1):
+            progress_percent = (idx / total_exts) * 100
+            progress_bar = "█" * int(progress_percent / 5) + "░" * (20 - int(progress_percent / 5))
+            
+            # Show what we're scanning
+            print(f"[{progress_bar}] {progress_percent:.1f}% | {Colors.YELLOW}Scanning: {ext:15s}{Colors.END}", end='', flush=True)
+            
             query = f'org:{self.target_org} extension:{ext.replace(".", "")}'
             results = self.search_code(query)
+            
+            # Clear and show result
+            if results:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.GREEN}✓ {ext:15s} - Found {len(results):2d} files{Colors.END}")
+            else:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.BLUE}○ {ext:15s} - No results{Colors.END}")
             
             for item in results:
                 self.findings.append({
@@ -394,18 +458,36 @@ class GitHubRecon:
                     "severity": "MEDIUM",
                     "timestamp": datetime.now().isoformat()
                 })
-            
-            log(f"  {ext}: {len(results)} results", "INFO")
+        
+        total_found = len([f for f in self.findings if f['type'] == 'Sensitive Extension'])
+        print(f"\n{Colors.GREEN}{'─'*70}{Colors.END}")
+        print(f"{Colors.GREEN}✓ Extension scan complete: {total_found} findings{Colors.END}")
+        print(f"{Colors.GREEN}{'─'*70}{Colors.END}\n")
     
     def search_keywords(self):
         """Search for sensitive keywords in code"""
-        log("Searching for sensitive keywords...", "HEADER")
+        total_keywords = len(Patterns.SENSITIVE_KEYWORDS)
         
-        for keyword in Patterns.SENSITIVE_KEYWORDS:
+        print(f"\n{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.BOLD}🔍 Deep Scanning {total_keywords} Keywords Across All Repositories{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}\n")
+        
+        for idx, keyword in enumerate(Patterns.SENSITIVE_KEYWORDS, 1):
+            progress_percent = (idx / total_keywords) * 100
+            progress_bar = "█" * int(progress_percent / 5) + "░" * (20 - int(progress_percent / 5))
+            
+            # Show what we're scanning
+            print(f"[{progress_bar}] {progress_percent:.1f}% | {Colors.YELLOW}Keyword: {keyword:20s}{Colors.END}", end='', flush=True)
+            
             query = f'org:{self.target_org} "{keyword}"'
             results = self.search_code(query, max_results=50)
             
+            files_scanned = 0
+            secrets_found = 0
+            
             for item in results:
+                files_scanned += 1
+                
                 # Fetch and scan content
                 file_url = item.get("url")
                 html_url = item.get("html_url")
@@ -413,10 +495,23 @@ class GitHubRecon:
                 content = self.fetch_file_content(file_url)
                 if content:
                     secret_findings = self.scan_content_for_secrets(content, html_url)
+                    secrets_found += len(secret_findings)
                     self.findings.extend(secret_findings)
             
-            log(f"  {keyword}: {len(results)} results scanned", "INFO")
+            # Clear and show result
+            if secrets_found > 0:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.RED}⚠️  {keyword:20s} - {secrets_found} secrets in {files_scanned} files{Colors.END}")
+            elif files_scanned > 0:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.GREEN}✓ {keyword:20s} - {files_scanned} files scanned (clean){Colors.END}")
+            else:
+                print(f"\r[{progress_bar}] {progress_percent:.1f}% | {Colors.BLUE}○ {keyword:20s} - No results{Colors.END}")
+            
             time.sleep(Config.RATE_LIMIT_DELAY)
+        
+        total_secrets = len([f for f in self.findings if f['type'] == 'Secret Pattern'])
+        print(f"\n{Colors.GREEN}{'─'*70}{Colors.END}")
+        print(f"{Colors.GREEN}✓ Keyword scan complete: {total_secrets} secrets discovered{Colors.END}")
+        print(f"{Colors.GREEN}{'─'*70}{Colors.END}\n")
     
     def run_gitleaks(self, repo_url: str, repo_name: str):
         """Run Gitleaks on a repository"""
@@ -625,7 +720,15 @@ class GitHubRecon:
     
     def run_full_scan(self):
         """Execute full reconnaissance workflow"""
-        log("Starting comprehensive GitHub reconnaissance...", "HEADER")
+        scan_start_time = datetime.now()
+        
+        print(f"\n{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.BOLD}🚀 INITIATING COMPREHENSIVE GITHUB RECONNAISSANCE{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.YELLOW}Target Organization: {Colors.BOLD}{self.target_org}{Colors.END}")
+        print(f"{Colors.YELLOW}Scan Started: {scan_start_time.strftime('%Y-%m-%d %H:%M:%S')}{Colors.END}")
+        print(f"{Colors.YELLOW}Output Directory: {Colors.BOLD}{self.output_dir}{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}\n")
         
         if not self.verify_token():
             log("Invalid GitHub token. Exiting.", "ERROR")
@@ -636,16 +739,32 @@ class GitHubRecon:
             return False
         
         # Phase 1: Repository enumeration
+        print(f"\n{Colors.BOLD}{'─'*70}{Colors.END}")
+        print(f"{Colors.CYAN}PHASE 1/4: REPOSITORY ENUMERATION{Colors.END}")
+        print(f"{Colors.BOLD}{'─'*70}{Colors.END}")
         repos = self.enumerate_repos()
+        print(f"{Colors.GREEN}✓ Phase 1 Complete: {len(repos)} repositories discovered{Colors.END}\n")
         
         # Phase 2: Sensitive file detection
+        print(f"\n{Colors.BOLD}{'─'*70}{Colors.END}")
+        print(f"{Colors.CYAN}PHASE 2/4: SENSITIVE FILE DETECTION{Colors.END}")
+        print(f"{Colors.BOLD}{'─'*70}{Colors.END}")
         self.search_sensitive_files()
+        print(f"{Colors.GREEN}✓ Phase 2 Complete{Colors.END}\n")
         
         # Phase 3: Sensitive extension detection
+        print(f"\n{Colors.BOLD}{'─'*70}{Colors.END}")
+        print(f"{Colors.CYAN}PHASE 3/4: SENSITIVE EXTENSION DETECTION{Colors.END}")
+        print(f"{Colors.BOLD}{'─'*70}{Colors.END}")
         self.search_sensitive_extensions()
+        print(f"{Colors.GREEN}✓ Phase 3 Complete{Colors.END}\n")
         
         # Phase 4: Keyword search
+        print(f"\n{Colors.BOLD}{'─'*70}{Colors.END}")
+        print(f"{Colors.CYAN}PHASE 4/4: DEEP SECRET PATTERN ANALYSIS{Colors.END}")
+        print(f"{Colors.BOLD}{'─'*70}{Colors.END}")
         self.search_keywords()
+        print(f"{Colors.GREEN}✓ Phase 4 Complete{Colors.END}\n")
         
         # Phase 5: External tool integration (optional)
         external_tools_available = any(
@@ -654,119 +773,146 @@ class GitHubRecon:
         )
         
         if external_tools_available and repos:
-            log("\nExternal tools detected. Running deep scans...", "HEADER")
+            print(f"\n{Colors.BOLD}{'─'*70}{Colors.END}")
+            print(f"{Colors.CYAN}BONUS PHASE: EXTERNAL TOOL DEEP SCAN{Colors.END}")
+            print(f"{Colors.BOLD}{'─'*70}{Colors.END}\n")
+            log("External tools detected. Running deep scans on top 5 repos...", "HEADER")
             
-            for repo in repos[:5]:  # Limit to first 5 repos
+            for idx, repo in enumerate(repos[:5], 1):
                 repo_url = repo.get('clone_url')
                 repo_name = repo.get('full_name')
+                
+                print(f"{Colors.YELLOW}[{idx}/5] Scanning repository: {repo_name}{Colors.END}")
                 
                 if check_tool_installed("gitleaks"):
                     self.run_gitleaks(repo_url, repo_name)
                 
                 if check_tool_installed("trufflehog"):
                     self.run_trufflehog(repo_url, repo_name)
+            
+            print(f"\n{Colors.GREEN}✓ External tool scans complete{Colors.END}\n")
         
         # Phase 6: Generate reports
+        print(f"\n{Colors.BOLD}{'─'*70}{Colors.END}")
+        print(f"{Colors.CYAN}FINAL PHASE: REPORT GENERATION{Colors.END}")
+        print(f"{Colors.BOLD}{'─'*70}{Colors.END}\n")
         self.generate_report()
+        
+        # Scan summary
+        scan_end_time = datetime.now()
+        scan_duration = (scan_end_time - scan_start_time).total_seconds()
+        
+        print(f"\n{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.BOLD}📊 SCAN COMPLETE - SUMMARY{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}")
+        print(f"{Colors.GREEN}Total Findings: {Colors.BOLD}{len(self.findings)}{Colors.END}")
+        print(f"{Colors.GREEN}Repositories Scanned: {Colors.BOLD}{len(repos)}{Colors.END}")
+        print(f"{Colors.GREEN}Scan Duration: {Colors.BOLD}{scan_duration/60:.1f} minutes{Colors.END}")
+        print(f"{Colors.GREEN}Results Saved To: {Colors.BOLD}{self.output_dir}{Colors.END}")
+        print(f"{Colors.CYAN}{'='*70}{Colors.END}\n")
+        
+        # File locations
+        print(f"{Colors.YELLOW}📁 Output Files:{Colors.END}")
+        print(f"  {Colors.CYAN}├─ {Colors.END}HTML Report: {Colors.BOLD}{self.output_dir / 'report.html'}{Colors.END}")
+        print(f"  {Colors.CYAN}├─ {Colors.END}Raw Findings: {Colors.BOLD}{self.output_dir / 'raw_findings.json'}{Colors.END}")
+        print(f"  {Colors.CYAN}├─ {Colors.END}Summary: {Colors.BOLD}{self.output_dir / 'summary.json'}{Colors.END}")
+        print(f"  {Colors.CYAN}└─ {Colors.END}Open report: {Colors.BOLD}open {self.output_dir / 'report.html'}{Colors.END}\n")
+        
+        # Findings breakdown
+        if self.findings:
+            print(f"{Colors.YELLOW}🔍 Findings Breakdown:{Colors.END}")
+            by_severity = {}
+            for finding in self.findings:
+                severity = finding.get("severity", "UNKNOWN")
+                by_severity[severity] = by_severity.get(severity, 0) + 1
+            
+            for severity, count in sorted(by_severity.items(), key=lambda x: x[1], reverse=True):
+                color = Colors.RED if severity == "HIGH" else Colors.YELLOW if severity == "MEDIUM" else Colors.GREEN
+                print(f"  {color}● {severity}: {count} findings{Colors.END}")
+        
+        print(f"\n{Colors.GREEN}{'='*70}{Colors.END}")
+        print(f"{Colors.BOLD}{Colors.GREEN}✓ Reconnaissance Complete! Review findings above.{Colors.END}")
+        print(f"{Colors.GREEN}{'='*70}{Colors.END}\n")
         
         return True
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MAIN EXECUTION
 # ═══════════════════════════════════════════════════════════════════════════
+
 def main():
-    """Main entry point with CLI arguments"""
+    """Main entry point"""
     print_banner()
-
-    # 1. Setup Argument Parser
-    parser = argparse.ArgumentParser(description='GitHub Advanced Reconnaissance Tool')
     
-    # Target Arguments (Optional - if not provided, script asks interactively)
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='GitHub Advanced Reconnaissance Tool',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python3 github_recon.py --token "ghp_..." --org "microsoft"
+  python3 github_recon.py --aggressive
+  python3 github_recon.py --conservative --no-validation
+        """
+    )
+    
     parser.add_argument('-t', '--token', help='GitHub Personal Access Token')
-    parser.add_argument('-o', '--org', help='Target Organization')
+    parser.add_argument('-o', '--org', help='Target organization name')
+    parser.add_argument('--aggressive', action='store_true', help='Fast mode (0.5s delay, 10 workers)')
+    parser.add_argument('--conservative', action='store_true', help='Slow mode (3s delay, 2 workers)')
+    parser.add_argument('--delay', type=float, help='Custom delay between requests')
+    parser.add_argument('--workers', type=int, help='Number of parallel workers')
+    parser.add_argument('--no-validation', action='store_true', help='Skip manual validation')
     
-    # Rate Limiting & Performance Options
-    parser.add_argument('--delay', type=float, default=2.0, 
-                       help='Delay between requests in seconds (default: 2.0)')
-    parser.add_argument('--max-results', type=int, default=100, 
-                       help='Max results per query (default: 100)')
-    parser.add_argument('--workers', type=int, default=5, 
-                       help='Number of parallel workers (default: 5)')
-    
-    # Presets
-    parser.add_argument('--conservative', action='store_true', 
-                       help='Slow mode to avoid detection (3s delay, fewer workers)')
-    parser.add_argument('--aggressive', action='store_true', 
-                       help='Fast mode (0.5s delay, more workers - Risky)')
-    
-    # Validation Toggle
-    parser.add_argument('--no-validation', action='store_true',
-                       help='Skip the interactive validation phase')
-
     args = parser.parse_args()
-
-    # 2. Apply Configuration Logic
-    if args.conservative:
-        log("Mode: Conservative (Slow & Stealthy)", "INFO")
-        Config.RATE_LIMIT_DELAY = 3.0
-        Config.MAX_WORKERS = 2
-        Config.MAX_RESULTS = 50
-    elif args.aggressive:
-        log("Mode: Aggressive (Fast & Noisy)", "WARNING")
+    
+    # Apply performance mode
+    if args.aggressive:
         Config.RATE_LIMIT_DELAY = 0.5
         Config.MAX_WORKERS = 10
-        Config.MAX_RESULTS = 200
-    else:
-        # Custom or Default
+        log("⚡ Aggressive mode enabled", "WARNING")
+    elif args.conservative:
+        Config.RATE_LIMIT_DELAY = 3
+        Config.MAX_WORKERS = 2
+        log("🐢 Conservative mode enabled", "INFO")
+    
+    # Apply custom settings
+    if args.delay:
         Config.RATE_LIMIT_DELAY = args.delay
+    if args.workers:
         Config.MAX_WORKERS = args.workers
-        Config.MAX_RESULTS = args.max_results
-
+    
     log(f"Configuration: Delay={Config.RATE_LIMIT_DELAY}s, Workers={Config.MAX_WORKERS}", "INFO")
-
-    # 3. Handle Token (CLI arg or Interactive)
-    if args.token:
-        token = args.token
-    else:
-        log("Configuration Setup", "HEADER")
+    
+    # Get token
+    token = args.token
+    if not token:
         token = input(f"{Colors.CYAN}Enter GitHub Personal Access Token: {Colors.END}").strip()
     
     if not token:
         log("Token is required. Exiting.", "ERROR")
         sys.exit(1)
-
-    # 4. Handle Target Org (CLI arg or Interactive)
-    if args.org:
-        target_org = args.org
-    else:
-        if not args.token: # Only print header if we haven't already
-            log("Target Setup", "HEADER") 
-        target_org = input(f"{Colors.CYAN}Enter target organization: {Colors.END}").strip()
-
-    if not target_org:
-        log("Organization is required. Exiting.", "ERROR")
-        sys.exit(1)
-
-    # 5. Run Reconnaissance
-    recon = GitHubRecon(token, target_org)
     
-    # Determine validation preference
-    if args.no_validation:
-        validate = False
-    else:
-        # If running purely from CLI args, default to validation=False unless interactive
-        if args.token and args.org: 
-             validate = False # Assume automated run if args provided
-        else:
-             validate_input = input(f"{Colors.CYAN}Run interactive validation? (y/n): {Colors.END}").lower()
-             validate = validate_input == 'y'
-
-    if recon.run_full_scan():
-        if validate:
+    # Get organization
+    target_org = args.org
+    if not target_org:
+        target_org = input(f"{Colors.CYAN}Enter target organization name: {Colors.END}").strip()
+    
+    if not target_org:
+        log("Organization name is required. Exiting.", "ERROR")
+        sys.exit(1)
+    
+    # Initialize and run
+    recon = GitHubRecon(token=token, target_org=target_org)
+    
+    success = recon.run_full_scan()
+    
+    if success and not args.no_validation:
+        validate_choice = input(f"\n{Colors.CYAN}Run validation workflow? (y/n): {Colors.END}").lower()
+        if validate_choice == 'y':
             recon.validate_findings()
-        log("Reconnaissance complete!", "SUCCESS")
-    else:
-        log("Reconnaissance failed.", "ERROR")
+    
+    print(f"\n{Colors.GREEN}Thank you for using GitHub Advanced Reconnaissance Tool!{Colors.END}\n")
 
 if __name__ == "__main__":
     main()
