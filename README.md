@@ -5,8 +5,8 @@
   </p>
   <p align="center">
     <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"></a>
-    <a href="#"><img src="https://img.shields.io/badge/Tools-9-blue?style=for-the-badge" alt="Tools"></a>
-    <a href="#-bug-bounty-notes"><img src="https://img.shields.io/badge/Guides-7-orange?style=for-the-badge" alt="Guides"></a>
+    <a href="#"><img src="https://img.shields.io/badge/Tools-14-blue?style=for-the-badge" alt="Tools"></a>
+    <a href="#-bug-bounty-notes"><img src="https://img.shields.io/badge/Guides-8-orange?style=for-the-badge" alt="Guides"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License"></a>
   </p>
 </p>
@@ -26,6 +26,26 @@
 ```
 Automation-scripts-for-bug-bounty/
 │
+├── subdomain-crawler/          # Shared Subdomain Enumeration Engine ← NEW
+│   ├── subdomain_crawler.py
+│   └── README.md
+│
+├── spf-checker/                # Email Security & SPF/DMARC Analyzer ← NEW
+│   ├── spf_checker.py
+│   └── README.md
+│
+├── origin-ip-finder/           # CDN/WAF Origin IP Discovery ← NEW
+│   ├── origin_ip_finder.py
+│   └── README.md
+│
+├── session-tester/             # Session Invalidation Tester ← NEW
+│   ├── session_logout_tester.py
+│   └── README.md
+│
+├── long-password-dos/          # Long Password DoS Tester ← NEW
+│   ├── long_password_dos.py
+│   └── README.md
+│
 ├── broken-link-hijacker/       # Broken Link Takeover Scanner
 │   ├── blh.py
 │   ├── requirements.txt
@@ -35,7 +55,7 @@ Automation-scripts-for-bug-bounty/
 │   ├── xss_scanner.py
 │   ├── requirements.txt
 │   ├── README.md
-│   └── README_xss.md          # Detailed usage guide
+│   └── README_xss.md
 │
 ├── phone-tracker/              # Phone Number Intelligence System
 │   ├── phone_tracker.py
@@ -44,12 +64,12 @@ Automation-scripts-for-bug-bounty/
 │
 ├── js-secrets-scanner/         # JavaScript Recon & Secret Extraction
 │   ├── js_secrets_scanner.py
-│   ├── setup.sh               # Auto-install script (Linux/Kali)
+│   ├── setup.sh
 │   └── README.md
 │
 ├── github-recon-tool/          # GitHub Reconnaissance Scanner
 │   ├── github_secrets_finding.py
-│   ├── github_recon_readme.md  # Detailed usage guide
+│   ├── github_recon_readme.md
 │   ├── requirements.txt
 │   └── README.md
 │
@@ -81,16 +101,121 @@ Automation-scripts-for-bug-bounty/
 │   ├── subdomain_takeover.md
 │   ├── js_recon.md
 │   ├── price_manipulation_guide.md
+│   ├── Low_Hanging_Fruits.md   ← NEW
 │   └── README.md
 │
-├── requirements.txt            # All dependencies (install everything)
+├── requirements.txt
 ├── .gitignore
 └── README.md                   # ← You are here
 ```
 
 ---
 
+## 🆕 New Tools — Subdomain-Integrated Security Suite
+
+Five new industry-standard tools with a **shared subdomain enumeration engine** that expands attack surface automatically. Every tool can discover subdomains to find more targets.
+
+### 🌐 Subdomain Integration Map
+
+| Tool | Flag | What Subdomain Crawling Adds |
+|------|------|------------------------------|
+| **SPF Checker** | `--crawl-subs` | Discovers subdomains → scans each for SPF/DMARC/DKIM |
+| **Origin IP Finder** | Built-in | Uses crt.sh + DNS brute-force for wider IP coverage |
+| **Session Tester** | `-d domain` | Crawls subdomains → finds login endpoints → suggests tests |
+| **Long Password DoS** | `-d domain` | Crawls subdomains → finds login forms → tests each |
+| **Subdomain Crawler** | Standalone | Used by all tools above, also works as CLI tool |
+
+---
+
 ## 🔧 Tools
+
+### 🌐 [Subdomain Crawler](subdomain-crawler/) — `subdomain_crawler.py` `NEW`
+> Shared subdomain enumeration engine — DNS brute-force (250+ prefixes), crt.sh certificate transparency, AXFR zone transfers, SPF/TXT extraction, HTTP alive checking, and login form detection. Works standalone or as a library imported by other tools.
+
+```bash
+python3 subdomain_crawler.py -d example.com --deep --find-logins
+```
+
+| Highlights | |
+|---|---|
+| 4 discovery methods | DNS brute-force, crt.sh, AXFR, SPF/TXT |
+| 250+ prefixes | Deep mode with extended wordlist |
+| Login detection | Finds password forms and common login paths |
+| Dual mode | Standalone CLI + importable library |
+
+---
+
+### ✉️ [SPF Checker](spf-checker/) — `spf_checker.py` `NEW`
+> Email security analyzer — SPF record parsing with 15+ mechanism types, DMARC policy analysis, DKIM selector brute-force (120+ selectors), BIMI record detection, email spoofability scoring, and subdomain crawling integration.
+
+```bash
+python3 spf_checker.py -d example.com --crawl-subs --dkim-deep
+```
+
+| Highlights | |
+|---|---|
+| 890+ lines | SPF, DMARC, DKIM, BIMI analysis |
+| 120+ selectors | DKIM brute-force discovery |
+| Spoofability score | 0-100 risk rating per domain |
+| Subdomain mode | `--crawl-subs` scans all discovered subdomains |
+
+---
+
+### 🔎 [Origin IP Finder](origin-ip-finder/) — `origin_ip_finder.py` `NEW`
+> CDN/WAF bypass tool — discovers real origin server IPs behind Cloudflare, Akamai, AWS CloudFront, and 15+ CDN providers. Uses DNS history, subdomain enumeration (crt.sh + brute-force), mail server analysis, and multiple verification methods.
+
+```bash
+python3 origin_ip_finder.py -d example.com --deep --verify
+```
+
+| Highlights | |
+|---|---|
+| 685+ lines | 15+ CDN/WAF fingerprints |
+| Multi-method | DNS history, subdomains, MX records, certificate matching |
+| crt.sh integration | Via shared subdomain crawler |
+| Confidence scoring | Low/Medium/High per candidate IP |
+
+---
+
+### 🔐 [Session Tester](session-tester/) — `session_logout_tester.py` `NEW`
+> Session invalidation tester — verifies whether session tokens/cookies remain valid after logout. Tests cookie security flags (Secure, HttpOnly, SameSite), cache-control headers, session timeout behavior, and OWASP compliance.
+
+```bash
+# Single URL mode
+python3 session_logout_tester.py -u https://example.com/dashboard --cookie "session=abc123" --logout-url https://example.com/logout
+
+# Domain discovery mode
+python3 session_logout_tester.py -d example.com
+```
+
+| Highlights | |
+|---|---|
+| 780+ lines | Session replay, cookie flags, timeout testing |
+| OWASP scoring | Compliance rating per endpoint |
+| Domain mode | `-d` discovers subdomains → finds login pages |
+| Cache analysis | Cache-Control, Pragma, ETag headers |
+
+---
+
+### 💥 [Long Password DoS](long-password-dos/) — `long_password_dos.py` `NEW`
+> Tests login endpoints for denial-of-service via extremely long passwords (up to 1MB). Measures response time degradation, detects hashing bottlenecks, and scores vulnerability severity.
+
+```bash
+# Single URL mode
+python3 long_password_dos.py -u https://example.com/login --runs 5
+
+# Domain discovery mode
+python3 long_password_dos.py -d example.com
+```
+
+| Highlights | |
+|---|---|
+| 660+ lines | Incremental password lengths (1KB → 1MB) |
+| Smart detection | Baseline comparison, response time analysis |
+| Domain mode | `-d` crawls subdomains for login forms |
+| Reports | JSON + HTML with timing charts |
+
+---
 
 ### 🔗 [Broken Link Hijacker](broken-link-hijacker/) — `blh.py`
 > Async crawler that finds dead external links and detects **claimable resources** — expired domains, deleted GitHub repos, unclaimed S3 buckets, dangling CNAMEs, and 35+ service fingerprints. Rich live dashboard, JSON + HTML reports.
@@ -221,6 +346,7 @@ In-depth playbooks and methodology guides for bug bounty hunters:
 | [**Subdomain Takeover**](notes/subdomain_takeover.md) | DNS mechanics, CNAME takeovers, service fingerprints |
 | [**JS Recon**](notes/js_recon.md) | JavaScript file mining, source maps, secret extraction |
 | [**Price Manipulation**](notes/price_manipulation_guide.md) | Mobile app price tampering, Burp Suite, SSL pinning bypass, Frida |
+| [**Low Hanging Fruits**](notes/Low_Hanging_Fruits.md) | Quick wins for bug bounty — easy vulns to check first |
 
 ---
 
@@ -240,6 +366,25 @@ pip3 install -r requirements.txt
 cd broken-link-hijacker  # or any tool folder
 pip3 install -r requirements.txt
 python3 blh.py -u https://example.com
+```
+
+### Subdomain-Integrated Workflow
+
+```bash
+# 1. Discover subdomains first
+python3 subdomain-crawler/subdomain_crawler.py -d target.com --deep --find-logins
+
+# 2. Check email security across all subdomains
+python3 spf-checker/spf_checker.py -d target.com --crawl-subs
+
+# 3. Find origin IPs behind CDN
+python3 origin-ip-finder/origin_ip_finder.py -d target.com --deep
+
+# 4. Discover login endpoints and test session security
+python3 session-tester/session_logout_tester.py -d target.com
+
+# 5. Test login forms for long password DoS
+python3 long-password-dos/long_password_dos.py -d target.com
 ```
 
 ---

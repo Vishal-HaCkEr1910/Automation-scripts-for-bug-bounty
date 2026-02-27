@@ -38,3 +38,9 @@ IPy>=1.01
 
 # ── Keylogger ────────────────────────────────────────────────
 pynput>=1.8.1
+
+# ── Subdomain Crawler / SPF Checker / Origin IP Finder ──────
+dnspython>=2.4.0
+
+# ── Session Tester / Long Password DoS (already covered) ────
+# requests, colorama — already listed above
