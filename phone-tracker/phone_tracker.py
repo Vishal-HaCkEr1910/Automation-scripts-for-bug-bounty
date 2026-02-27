@@ -21,7 +21,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Auto-load .env file for persistent API keys
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    load_dotenv(os.path.join(_script_dir, ".env"))
+    load_dotenv()  # also check cwd
 except ImportError:
     pass
 
