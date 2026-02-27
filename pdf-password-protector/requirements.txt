@@ -1,0 +1,4 @@
+# PDF Password Protector — Dependencies
+# Install: pip3 install -r requirements.txt
+
+PyPDF2>=3.0.1

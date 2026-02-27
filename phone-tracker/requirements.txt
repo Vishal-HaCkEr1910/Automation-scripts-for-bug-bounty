@@ -1,0 +1,11 @@
+# Phone Tracker Pro — Dependencies
+# Install: pip3 install -r requirements.txt
+
+phonenumbers>=8.13.0
+opencage>=2.0.0
+folium>=0.15.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+rich>=13.0.0
+colorama>=0.4.6
+python-dotenv>=1.0.0

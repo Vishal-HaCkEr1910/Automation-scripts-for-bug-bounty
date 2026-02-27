@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════════
+# Automation Scripts for Bug Bounty — All Dependencies
+# Author: Vishal Rao (@Vishal-HaCkEr1910)
+# Install: pip3 install -r requirements.txt
+# Or install per-tool: cd <tool-folder> && pip3 install -r requirements.txt
+# ═══════════════════════════════════════════════════════════════
+
+# ── Broken Link Hijacker ─────────────────────────────────────
+aiohttp>=3.9.0
+tldextract>=5.0.0
+certifi>=2024.0.0
+fake-useragent>=1.4.0
+
+# ── XSS Scanner / Phone Tracker / GitHub Recon ──────────────
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+
+# ── Terminal UI ──────────────────────────────────────────────
+rich>=13.0.0
+colorama>=0.4.6
+
+# ── Phone Tracker ────────────────────────────────────────────
+phonenumbers>=8.13.0
+opencage>=2.0.0
+folium>=0.15.0
+python-dotenv>=1.0.0
+
+# ── PDF Password Protector ───────────────────────────────────
+PyPDF2>=3.0.1
+
+# ── SSH Bruteforcer ──────────────────────────────────────────
+paramiko>=3.4.0
+termcolor>=2.4.0
+
+# ── Port Scanner ─────────────────────────────────────────────
+IPy>=1.01
+
+# ── Keylogger ────────────────────────────────────────────────
+pynput>=1.8.1
